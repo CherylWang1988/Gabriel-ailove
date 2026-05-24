@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx create-expo-app@latest mobile --template blank-typescript)",
+      "Bash(npx expo *)",
+      "WebFetch(domain:docs.expo.dev)",
+      "Bash(npx tsc *)",
+      "Bash(rm -rf \"f:/学习/Gabriel/mobile/.git\")",
+      "Bash(git init *)",
+      "Bash(git add *)"
+    ]
+  }
+}
