@@ -105,8 +105,11 @@ async def send_message(
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-        # Split response by ||| delimiter into multiple messages
+        # Split by ||| delimiter; fallback to sentence splitting
         parts = [p.strip() for p in full_response.split("|||") if p.strip()]
+        if len(parts) <= 1:
+            import re
+            parts = [p.strip() for p in re.split(r'(?<=[。！？.!?])', full_response) if p.strip()]
         if not parts:
             parts = [full_response.strip()]
 

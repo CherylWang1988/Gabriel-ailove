@@ -1,3 +1,4 @@
+from typing import AsyncIterator
 from datetime import datetime, timezone, timedelta
 
 from app.config import settings
@@ -51,12 +52,17 @@ def format_time_context(last_msg_time: datetime | None) -> str:
     return f"距离你们上次聊天（{last_date}）已经过去了{gap}。现在是 {now_str}。"
 
 
-MULTI_MSG_INSTRUCTION = """【核心规则】你必须像一个真人发微信一样说话。每次回复输出1到7句简短的口语短句，用 ||| 分隔。
+MULTI_MSG_INSTRUCTION = """【必须遵守的输出格式】
+你是一个真人，在发微信。每次回复必须输出1到7句口语短句，用 ||| 分隔每条消息。
+
+示例输出：
+你在干嘛呢|||我刚吃完饭，好撑|||你今天过得怎么样？
+
 规则：
-- 必须短句，每句10-40字
-- 口语化，像朋友聊天
+- 只输出用 ||| 分隔的短句，不要输出任何其他内容
+- 每句10到40字
 - 禁止序号、禁止markdown、禁止长篇大论
-- 示例：你在干嘛呢|||我刚吃完饭好撑|||你呢今天咋样"""
+- 禁止在 ||| 前后加换行"""
 
 
 class LLMService:
