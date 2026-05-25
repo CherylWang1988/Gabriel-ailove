@@ -105,17 +105,26 @@ async def send_message(
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-        # Split by ||| delimiter; fallback to sentence splitting; then length-based
-        parts = [p.strip() for p in full_response.split("|||") if p.strip()]
+        # Split response into multiple messages
+        import re
+        raw = full_response.strip()
+
+        # 1. Try ||| delimiter
+        parts = [p.strip() for p in raw.split("|||") if p.strip()]
+
+        # 2. Fallback: split by sentence-ending punctuation
         if len(parts) <= 1:
-            import re
-            parts = [p.strip() for p in re.split(r'(?<=[。！？.!?\n])', full_response) if p.strip()]
-        if len(parts) <= 1 and len(full_response) > 60:
-            # Force split long unpunctuated text into ~20-40 char chunks
-            raw = full_response.strip()
-            parts = [raw[i:i+40].strip() for i in range(0, len(raw), 40) if raw[i:i+40].strip()]
+            parts = [p.strip() for p in re.split(r'(?<=[。！？.!?\n])', raw) if p.strip()]
+
+        # 3. Fallback: force split long unpunctuated text at ~25-35 chars
+        if len(parts) <= 1 and len(raw) > 30:
+            chunk = 30
+            parts = [raw[i:i+chunk].strip() for i in range(0, len(raw), chunk) if raw[i:i+chunk].strip()]
+
         if not parts:
-            parts = [full_response.strip()]
+            parts = [raw]
+
+        print(f"[split] raw_len={len(raw)}, parts={len(parts)}, preview={[p[:30] for p in parts]}")
 
         saved_messages = []
         async with async_session() as save_db:

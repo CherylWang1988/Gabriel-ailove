@@ -1,4 +1,4 @@
-import { createContext, useContext, useReducer, useCallback, ReactNode } from "react";
+import { createContext, useContext, useReducer, useCallback, useRef, ReactNode } from "react";
 import { Conversation, Message, Persona } from "../types";
 import { api } from "../services/api";
 
@@ -84,6 +84,7 @@ const ChatContext = createContext<{
 
 export function ChatProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(chatReducer, initialState);
+  const genRef = useRef(0);
 
   const loadPersona = useCallback(async () => {
     try {
@@ -125,6 +126,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const sendMessage = useCallback(async (conversationId: string, content: string) => {
+    const gen = ++genRef.current;
+
     const userMsg: Message = {
       id: uid(),
       conversation_id: conversationId,
@@ -137,25 +140,26 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
     try {
       const result = await api.sendMessage(conversationId, content);
+      if (gen !== genRef.current) return; // newer sendMessage started, cancel this one
       const replies = result.messages;
       if (!replies || replies.length === 0) {
-        dispatch({ type: "SET_STREAMING", isStreaming: false });
+        if (gen === genRef.current) dispatch({ type: "SET_STREAMING", isStreaming: false });
         return;
       }
 
-      // Play each reply message with typing effect, then gap between them
       for (let ri = 0; ri < replies.length; ri++) {
+        if (gen !== genRef.current) return;
         const msg = replies[ri];
         const text = msg?.content || "";
         const msgId = msg?.id || uid();
 
-        // Type out characters one by one
         for (let i = 1; i <= text.length; i++) {
+          if (gen !== genRef.current) return;
           dispatch({ type: "SET_STREAMING", isStreaming: true, content: text.slice(0, i) });
           await sleep(30 + Math.random() * 40);
         }
 
-        // Commit the finished message
+        if (gen !== genRef.current) return;
         dispatch({
           type: "ADD_MESSAGE",
           conversationId,
@@ -168,18 +172,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           },
         });
 
-        // Gap between messages (1-2s)
         if (ri < replies.length - 1) {
           dispatch({ type: "SET_STREAMING", isStreaming: false });
           await sleep(1000 + Math.random() * 1500);
+          if (gen !== genRef.current) return;
           dispatch({ type: "SET_STREAMING", isStreaming: true, content: "" });
         }
       }
 
-      dispatch({ type: "SET_STREAMING", isStreaming: false });
+      if (gen === genRef.current) dispatch({ type: "SET_STREAMING", isStreaming: false });
     } catch (e) {
       console.warn("sendMessage failed:", e);
-      dispatch({ type: "SET_STREAMING", isStreaming: false });
+      if (gen === genRef.current) dispatch({ type: "SET_STREAMING", isStreaming: false });
     }
   }, []);
 
