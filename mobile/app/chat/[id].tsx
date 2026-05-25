@@ -83,16 +83,14 @@ export default function ChatScreen() {
     await sendMessage(id!, content);
   };
 
-  const renderItem = ({ item }: { item: RenderItem }) => {
+  const renderItem = useCallback(({ item }: { item: RenderItem }) => {
     try {
-      if (item.kind === "ts") {
-        return <TimestampSeparator text={item.text} />;
-      }
+      if (item.kind === "ts") return <TimestampSeparator text={item.text} />;
       return <MessageBubble message={item.data} />;
     } catch {
       return null;
     }
-  };
+  }, []);
 
   return (
     <KeyboardAvoidingView

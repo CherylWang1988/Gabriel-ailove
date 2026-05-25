@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { View, Text, StyleSheet } from "react-native";
 import { Message } from "../types";
 
@@ -5,7 +6,7 @@ interface Props {
   message: Message;
 }
 
-export default function MessageBubble({ message }: Props) {
+const MessageBubble = memo(function MessageBubble({ message }: Props) {
   const isUser = message.role === "user";
 
   return (
@@ -74,3 +75,5 @@ const styles = StyleSheet.create({
     color: "#e0e0e0",
   },
 });
+
+export default MessageBubble;

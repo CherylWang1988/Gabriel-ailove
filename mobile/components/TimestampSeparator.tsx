@@ -1,16 +1,17 @@
+import { memo } from "react";
 import { View, Text, StyleSheet } from "react-native";
 
 interface Props {
   text: string;
 }
 
-export default function TimestampSeparator({ text }: Props) {
+const TimestampSeparator = memo(function TimestampSeparator({ text }: Props) {
   return (
     <View style={styles.container}>
       <Text style={styles.text}>{text}</Text>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {
@@ -27,3 +28,5 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
 });
+
+export default TimestampSeparator;
