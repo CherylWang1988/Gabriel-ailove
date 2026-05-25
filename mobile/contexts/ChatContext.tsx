@@ -1,6 +1,10 @@
-import { createContext, useContext, useReducer, useCallback, ReactNode } from "react";
-import { Conversation, Message, Persona, SSEEvent } from "../types";
+import { createContext, useContext, useReducer, useCallback, useRef, ReactNode } from "react";
+import { Conversation, Message, Persona } from "../types";
 import { api } from "../services/api";
+
+function uid(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 interface ChatState {
   persona: Persona | null;
@@ -19,7 +23,6 @@ type ChatAction =
   | { type: "SET_MESSAGES"; conversationId: string; messages: Message[] }
   | { type: "ADD_MESSAGE"; conversationId: string; message: Message }
   | { type: "SET_STREAMING"; isStreaming: boolean; content?: string }
-  | { type: "APPEND_STREAM_TOKEN"; token: string }
   | { type: "SET_LOADING"; isLoading: boolean };
 
 function chatReducer(state: ChatState, action: ChatAction): ChatState {
@@ -28,25 +31,44 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return { ...state, persona: action.persona };
     case "SET_CONVERSATIONS":
       return { ...state, conversations: action.conversations };
-    case "ADD_CONVERSATION":
+    case "ADD_CONVERSATION": {
+      const exists = state.conversations.some((c) => c.id === action.conversation.id);
+      if (exists) return state;
       return { ...state, conversations: [action.conversation, ...state.conversations] };
+    }
     case "REMOVE_CONVERSATION":
       return {
         ...state,
         conversations: state.conversations.filter((c) => c.id !== action.id),
       };
-    case "SET_MESSAGES":
-      return {
-        ...state,
-        messages: { ...state.messages, [action.conversationId]: action.messages },
-      };
-    case "ADD_MESSAGE": {
-      const existing = state.messages[action.conversationId] || [];
+    case "SET_MESSAGES": {
+      const current = state.messages[action.conversationId] || [];
+      // Merge: keep any local temp messages that haven't been persisted yet
+      const currentIds = new Set(action.messages.map((m) => m.id));
+      const tempOnly = current.filter(
+        (m) => m.id.startsWith("temp-") && !currentIds.has(m.id)
+      );
       return {
         ...state,
         messages: {
           ...state.messages,
-          [action.conversationId]: [...existing, action.message],
+          [action.conversationId]: [...tempOnly, ...action.messages],
+        },
+      };
+    }
+    case "ADD_MESSAGE": {
+      const existing = state.messages[action.conversationId] || [];
+      // Hard dedup by id
+      if (existing.some((m) => m.id === action.message.id)) {
+        return state;
+      }
+      // Ensure every message has an id
+      const safe = { ...action.message, id: action.message.id || uid() };
+      return {
+        ...state,
+        messages: {
+          ...state.messages,
+          [action.conversationId]: [...existing, safe],
         },
       };
     }
@@ -54,12 +76,7 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return {
         ...state,
         isStreaming: action.isStreaming,
-        streamingContent: action.content || "",
-      };
-    case "APPEND_STREAM_TOKEN":
-      return {
-        ...state,
-        streamingContent: state.streamingContent + action.token,
+        streamingContent: action.content ?? "",
       };
     case "SET_LOADING":
       return { ...state, isLoading: action.isLoading };
@@ -89,11 +106,16 @@ const ChatContext = createContext<{
 
 export function ChatProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(chatReducer, initialState);
+  const sendLockRef = useRef(false);
 
   const loadPersona = useCallback(async () => {
-    const personas = await api.getPersonas();
-    if (personas.length > 0) {
-      dispatch({ type: "SET_PERSONA", persona: personas[0] });
+    try {
+      const personas = await api.getPersonas();
+      if (personas.length > 0) {
+        dispatch({ type: "SET_PERSONA", persona: personas[0] });
+      }
+    } catch (err) {
+      console.warn("loadPersona failed:", err);
     }
   }, []);
 
@@ -102,74 +124,121 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     try {
       const convs = await api.getConversations();
       dispatch({ type: "SET_CONVERSATIONS", conversations: convs });
+    } catch (err) {
+      console.warn("loadConversations failed:", err);
     } finally {
       dispatch({ type: "SET_LOADING", isLoading: false });
     }
   }, []);
 
   const loadMessages = useCallback(async (conversationId: string) => {
-    const msgs = await api.getMessages(conversationId);
-    dispatch({ type: "SET_MESSAGES", conversationId, messages: msgs });
+    try {
+      const msgs = await api.getMessages(conversationId);
+      dispatch({ type: "SET_MESSAGES", conversationId, messages: msgs });
+    } catch (err) {
+      console.warn("loadMessages failed:", err);
+    }
   }, []);
 
   const createConversation = useCallback(async () => {
-    if (!state.persona) {
-      await loadPersona();
-      // Re-get from state won't work, so load directly
+    try {
       const personas = await api.getPersonas();
       if (personas.length === 0) return null;
       const conv = await api.createConversation(personas[0].id);
       dispatch({ type: "ADD_CONVERSATION", conversation: conv });
       return conv;
+    } catch (err) {
+      console.warn("createConversation failed:", err);
+      return null;
     }
-    const conv = await api.createConversation(state.persona.id);
-    dispatch({ type: "ADD_CONVERSATION", conversation: conv });
-    return conv;
-  }, [state.persona]);
+  }, []);
 
   const deleteConversation = useCallback(async (id: string) => {
-    await api.deleteConversation(id);
-    dispatch({ type: "REMOVE_CONVERSATION", id });
-  }, []);
-
-  const sendMessage = useCallback(async (conversationId: string, content: string) => {
-    const userMsg: Message = {
-      id: `temp-${Date.now()}`,
-      conversation_id: conversationId,
-      role: "user",
-      content,
-      created_at: new Date().toISOString(),
-    };
-    dispatch({ type: "ADD_MESSAGE", conversationId, message: userMsg });
-    dispatch({ type: "SET_STREAMING", isStreaming: true, content: "" });
-
-    let fullResponse = "";
-
     try {
-      for await (const event of api.sendMessage(conversationId, content)) {
-        if (event.type === "token") {
-          fullResponse += event.content;
-          dispatch({ type: "APPEND_STREAM_TOKEN", token: event.content });
-        } else if (event.type === "done") {
-          const assistantMsg: Message = {
-            id: event.message_id,
-            conversation_id: conversationId,
-            role: "assistant",
-            content: fullResponse,
-            created_at: new Date().toISOString(),
-          };
-          dispatch({ type: "ADD_MESSAGE", conversationId, message: assistantMsg });
-          dispatch({ type: "SET_STREAMING", isStreaming: false });
-        } else if (event.type === "error") {
-          dispatch({ type: "SET_STREAMING", isStreaming: false });
-          console.error("Stream error:", event.message);
-        }
-      }
+      await api.deleteConversation(id);
+      dispatch({ type: "REMOVE_CONVERSATION", id });
     } catch (err) {
-      dispatch({ type: "SET_STREAMING", isStreaming: false });
-      console.error("Send message failed:", err);
+      console.warn("deleteConversation failed:", err);
     }
   }, []);
+
+  const sendMessage = useCallback(
+    async (conversationId: string, content: string) => {
+      // Guard: skip if mid-stream
+      if (sendLockRef.current) return;
+      sendLockRef.current = true;
+
+      const userMsg: Message = {
+        id: uid(),
+        conversation_id: conversationId,
+        role: "user",
+        content,
+        created_at: new Date().toISOString(),
+      };
+      dispatch({ type: "ADD_MESSAGE", conversationId, message: userMsg });
+      dispatch({ type: "SET_STREAMING", isStreaming: true, content: "" });
+
+      try {
+        const result = await api.sendMessage(conversationId, content);
+        const replyMessages = result.messages;
+
+        if (!replyMessages || replyMessages.length === 0) {
+          dispatch({ type: "SET_STREAMING", isStreaming: false });
+          return;
+        }
+
+        await new Promise<void>((resolve) => {
+          let idx = 0;
+
+          const playOne = () => {
+            if (idx >= replyMessages.length) {
+              dispatch({ type: "SET_STREAMING", isStreaming: false });
+              resolve();
+              return;
+            }
+            const msg = replyMessages[idx];
+            const msgId = msg?.id || uid();
+            const text = msg?.content || "";
+            let revealed = "";
+            let i = 0;
+
+            const tick = () => {
+              if (i < text.length) {
+                revealed += text[i];
+                i++;
+                dispatch({ type: "SET_STREAMING", isStreaming: true, content: revealed });
+                setTimeout(tick, 30 + Math.random() * 40);
+              } else {
+                dispatch({
+                  type: "ADD_MESSAGE",
+                  conversationId,
+                  message: {
+                    id: msgId,
+                    conversation_id: conversationId,
+                    role: "assistant" as const,
+                    content: text,
+                    created_at: new Date().toISOString(),
+                  },
+                });
+                idx++;
+                const gap = idx < replyMessages.length ? 1000 + Math.random() * 1500 : 50;
+                setTimeout(playOne, gap);
+              }
+            };
+            tick();
+          };
+
+          playOne();
+        });
+      } catch (err) {
+        dispatch({ type: "SET_STREAMING", isStreaming: false });
+        console.warn("sendMessage failed:", err);
+      } finally {
+        sendLockRef.current = false;
+      }
+    },
+    []
+  );
 
   return (
     <ChatContext.Provider

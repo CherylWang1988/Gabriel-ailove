@@ -1,4 +1,4 @@
-import { Conversation, Message, Persona, SSEEvent } from "../types";
+import { Conversation, Message, Persona, SendMessageResponse } from "../types";
 
 const BASE_URL = process.env.EXPO_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -38,47 +38,22 @@ export const api = {
   deleteConversation: (id: string) =>
     request<void>(`/api/conversations/${id}`, { method: "DELETE" }),
 
-  async *sendMessage(
+  sendMessage: async (
     conversationId: string,
     content: string
-  ): AsyncGenerator<SSEEvent> {
+  ): Promise<SendMessageResponse> => {
     const res = await fetch(
-      `${BASE_URL}/api/conversations/${conversationId}/messages`,
+      `${BASE_URL}/api/conversations/${conversationId}/messages?stream=false`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content }),
       }
     );
-
     if (!res.ok) {
-      throw new Error(`Failed to send message: ${res.status}`);
+      const text = await res.text();
+      throw new Error(`${res.status}: ${text}`);
     }
-
-    const reader = res.body?.getReader();
-    if (!reader) throw new Error("No response body");
-
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          try {
-            const event: SSEEvent = JSON.parse(line.slice(6));
-            yield event;
-          } catch {
-            // Skip malformed lines
-          }
-        }
-      }
-    }
+    return res.json();
   },
 };

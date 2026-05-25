@@ -1,18 +1,20 @@
 import json
 import uuid
 import asyncio
+import random
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from app.config import settings
 from app.database import get_db, async_session
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.persona import Persona
 from app.schemas.message import MessageCreate, MessageOut
-from app.services.llm_service import LLMService
+from app.services.llm_service import LLMService, format_time_context
 from app.services.memory_service import MemoryService
 
 router = APIRouter(prefix="/api/conversations", tags=["messages"])
@@ -39,6 +41,7 @@ async def list_messages(
 async def send_message(
     conversation_id: str,
     body: MessageCreate,
+    stream: bool = True,
     db: AsyncSession = Depends(get_db),
 ):
     conv_result = await db.execute(select(Conversation).where(Conversation.id == conversation_id))
@@ -69,6 +72,14 @@ async def send_message(
     )
     history = history_result.scalars().all()
 
+    # Time awareness: find last assistant message time
+    last_assistant_time = None
+    for m in reversed(history):
+        if m.role == "assistant":
+            last_assistant_time = m.created_at
+            break
+    time_context = format_time_context(last_assistant_time)
+
     # Retrieve relevant long-term memories
     memory_service = MemoryService()
     relevant_memories = await memory_service.retrieve(body.content, db)
@@ -79,7 +90,56 @@ async def send_message(
         persona=persona,
         history=history,
         memories=relevant_memories,
+        time_context=time_context,
     )
+
+    if not stream:
+        # Human-like delay before replying (simulate reading/thinking)
+        delay = random.uniform(settings.pre_reply_delay_min, settings.pre_reply_delay_max)
+        await asyncio.sleep(delay)
+
+        try:
+            full_response = ""
+            async for token in llm_service.stream_chat(context_messages):
+                full_response += token
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+        # Split response by ||| delimiter into multiple messages
+        parts = [p.strip() for p in full_response.split("|||") if p.strip()]
+        if not parts:
+            parts = [full_response.strip()]
+
+        saved_messages = []
+        async with async_session() as save_db:
+            for i, part in enumerate(parts):
+                assistant_msg = Message(
+                    conversation_id=uuid.UUID(conversation_id),
+                    role="assistant",
+                    content=part,
+                )
+                save_db.add(assistant_msg)
+                saved_messages.append({"id": str(assistant_msg.id), "content": part})
+
+                # Update conversation count
+                conv_result = await save_db.execute(
+                    select(Conversation).where(Conversation.id == conversation_id)
+                )
+                save_conv = conv_result.scalar_one()
+                save_conv.message_count += 1
+
+            await save_db.commit()
+
+            # Extract memories from the full exchange
+            await memory_service.extract_and_store(
+                user_content=body.content,
+                assistant_content=full_response,
+                conversation_id=uuid.UUID(conversation_id),
+                db=save_db,
+                llm_service=llm_service,
+            )
+
+            return {"messages": saved_messages}
 
     async def event_stream():
         full_response = ""

@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     embedding_base_url: str = ""
     embedding_model: str = "text-embedding-3-small"
 
+    # Human-like delay before reply (seconds)
+    pre_reply_delay_min: float = 2.0
+    pre_reply_delay_max: float = 5.0
+
     # Memory
     short_term_memory_size: int = 20
     long_term_memory_top_k: int = 5

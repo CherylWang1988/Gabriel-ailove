@@ -25,19 +25,11 @@ export interface Message {
   created_at: string;
 }
 
-export interface SSETokenEvent {
-  type: "token";
+export interface ReplyMessage {
+  id: string;
   content: string;
 }
 
-export interface SSEDoneEvent {
-  type: "done";
-  message_id: string;
+export interface SendMessageResponse {
+  messages: ReplyMessage[];
 }
-
-export interface SSEErrorEvent {
-  type: "error";
-  message: string;
-}
-
-export type SSEEvent = SSETokenEvent | SSEDoneEvent | SSEErrorEvent;

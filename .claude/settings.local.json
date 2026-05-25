@@ -26,7 +26,10 @@
       "Read(//c/Program Files/GitHub CLI/**)",
       "Read(//mnt/c/Program Files/GitHub CLI/**)",
       "Bash(find /c -name \"gh.exe\" -maxdepth 4)",
-      "Bash(cmd //c \"where gh\")"
+      "Bash(cmd //c \"where gh\")",
+      "Bash(git push *)",
+      "Bash(git remote *)",
+      "Bash(git commit -m '@ *)"
     ]
   }
 }

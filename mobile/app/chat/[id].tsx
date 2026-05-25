@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -9,9 +9,26 @@ import {
 } from "react-native";
 import { useLocalSearchParams, Stack } from "expo-router";
 import { useChat } from "../../contexts/ChatContext";
+import { Message } from "../../types";
 import MessageBubble from "../../components/MessageBubble";
 import TypingIndicator from "../../components/TypingIndicator";
+import TimestampSeparator from "../../components/TimestampSeparator";
 import ChatInput from "../../components/ChatInput";
+
+type RenderItem =
+  | { kind: "msg"; data: Message; key: string }
+  | { kind: "ts"; text: string; key: string };
+
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  const m = d.getMonth() + 1;
+  const day = d.getDate();
+  const h = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${m}月${day}日 ${h}:${min}`;
+}
+
+const GAP_MINUTES = 5;
 
 export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -19,7 +36,31 @@ export default function ChatScreen() {
   const flatListRef = useRef<FlatList>(null);
 
   const conversation = state.conversations.find((c) => c.id === id);
-  const messages = state.messages[id] || [];
+  const rawMessages = state.messages[id] || [];
+
+  // Inject timestamp separators between messages with gap > 5 min
+  const messages = useMemo(() => {
+    const out: RenderItem[] = [];
+    for (let i = 0; i < rawMessages.length; i++) {
+      if (i > 0) {
+        const prev = new Date(rawMessages[i - 1].created_at).getTime();
+        const curr = new Date(rawMessages[i].created_at).getTime();
+        if (curr - prev > GAP_MINUTES * 60 * 1000) {
+          out.push({
+            kind: "ts",
+            text: formatDate(rawMessages[i].created_at),
+            key: `ts-${i}`,
+          });
+        }
+      }
+      out.push({
+        kind: "msg",
+        data: rawMessages[i],
+        key: rawMessages[i].id || `msg-${i}`,
+      });
+    }
+    return out;
+  }, [rawMessages]);
 
   useEffect(() => {
     if (id) {
@@ -35,16 +76,23 @@ export default function ChatScreen() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages.length, state.streamingContent]);
+  }, [rawMessages.length, state.streamingContent]);
 
   const handleSend = async (content: string) => {
-    if (!content.trim() || state.isStreaming) return;
+    if (!content.trim()) return;
     await sendMessage(id!, content);
   };
 
-  const renderItem = ({ item }: { item: (typeof messages)[0] }) => (
-    <MessageBubble message={item} />
-  );
+  const renderItem = ({ item }: { item: RenderItem }) => {
+    try {
+      if (item.kind === "ts") {
+        return <TimestampSeparator text={item.text} />;
+      }
+      return <MessageBubble message={item.data} />;
+    } catch {
+      return null;
+    }
+  };
 
   return (
     <KeyboardAvoidingView
@@ -63,7 +111,7 @@ export default function ChatScreen() {
       <FlatList
         ref={flatListRef}
         data={messages}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item) => item.key}
         renderItem={renderItem}
         contentContainerStyle={styles.messageList}
         onContentSizeChange={scrollToBottom}
@@ -74,12 +122,12 @@ export default function ChatScreen() {
         }
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Text style={styles.emptyText}>Start a conversation</Text>
+            <Text style={styles.emptyText}>开始聊天吧</Text>
           </View>
         }
       />
 
-      <ChatInput onSend={handleSend} disabled={state.isStreaming} />
+      <ChatInput onSend={handleSend} disabled={false} />
     </KeyboardAvoidingView>
   );
 }
