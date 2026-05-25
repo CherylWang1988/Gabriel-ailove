@@ -23,7 +23,7 @@ const MessageBubble = memo(function MessageBubble({ message }: Props) {
       </View>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {
