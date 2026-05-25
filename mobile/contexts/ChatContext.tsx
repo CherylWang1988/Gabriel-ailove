@@ -125,9 +125,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const sendMessage = useCallback(async (conversationId: string, content: string) => {
-    // Prevent double-send while AI is replying
-    if (state.isStreaming) return;
-
     const userMsg: Message = {
       id: uid(),
       conversation_id: conversationId,
@@ -184,7 +181,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       console.warn("sendMessage failed:", e);
       dispatch({ type: "SET_STREAMING", isStreaming: false });
     }
-  }, [state.isStreaming]);
+  }, []);
 
   return (
     <ChatContext.Provider value={{ state, loadPersona, loadConversations, loadMessages, createConversation, deleteConversation, sendMessage }}>

@@ -105,11 +105,15 @@ async def send_message(
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-        # Split by ||| delimiter; fallback to sentence splitting
+        # Split by ||| delimiter; fallback to sentence splitting; then length-based
         parts = [p.strip() for p in full_response.split("|||") if p.strip()]
         if len(parts) <= 1:
             import re
-            parts = [p.strip() for p in re.split(r'(?<=[。！？.!?])', full_response) if p.strip()]
+            parts = [p.strip() for p in re.split(r'(?<=[。！？.!?\n])', full_response) if p.strip()]
+        if len(parts) <= 1 and len(full_response) > 60:
+            # Force split long unpunctuated text into ~20-40 char chunks
+            raw = full_response.strip()
+            parts = [raw[i:i+40].strip() for i in range(0, len(raw), 40) if raw[i:i+40].strip()]
         if not parts:
             parts = [full_response.strip()]
 
