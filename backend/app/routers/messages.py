@@ -110,21 +110,21 @@ async def send_message(
         raw = full_response.strip()
 
         # 1. Try ||| delimiter
-        parts = [p.strip() for p in raw.split("|||") if p.strip()]
+        parts = [p.strip() for p in raw.split("|||") if p.strip() and len(p.strip()) >= 2]
 
         # 2. Fallback: split by sentence-ending punctuation
         if len(parts) <= 1:
-            parts = [p.strip() for p in re.split(r'(?<=[。！？.!?\n])', raw) if p.strip()]
+            parts = [p.strip() for p in re.split(r'(?<=[。！？.!?\n])', raw) if p.strip() and len(p.strip()) >= 2]
 
         # 3. Fallback: force split long unpunctuated text at ~25-35 chars
         if len(parts) <= 1 and len(raw) > 30:
             chunk = 30
-            parts = [raw[i:i+chunk].strip() for i in range(0, len(raw), chunk) if raw[i:i+chunk].strip()]
+            parts = [raw[i:i+chunk].strip() for i in range(0, len(raw), chunk) if raw[i:i+chunk].strip() and len(raw[i:i+chunk].strip()) >= 2]
 
         if not parts:
             parts = [raw]
 
-        print(f"[split] raw_len={len(raw)}, parts={len(parts)}, preview={[p[:30] for p in parts]}")
+        print(f"[split] raw_len={len(raw)}, parts={len(parts)}")
 
         saved_messages = []
         async with async_session() as save_db:

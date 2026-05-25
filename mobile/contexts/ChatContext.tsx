@@ -136,30 +136,30 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       created_at: new Date().toISOString(),
     };
     dispatch({ type: "ADD_MESSAGE", conversationId, message: userMsg });
-    dispatch({ type: "SET_STREAMING", isStreaming: true, content: "" });
+
+    const isLatest = () => gen === genRef.current;
+    if (isLatest()) dispatch({ type: "SET_STREAMING", isStreaming: true, content: "" });
 
     try {
       const result = await api.sendMessage(conversationId, content);
-      if (gen !== genRef.current) return; // newer sendMessage started, cancel this one
       const replies = result.messages;
       if (!replies || replies.length === 0) {
-        if (gen === genRef.current) dispatch({ type: "SET_STREAMING", isStreaming: false });
+        if (isLatest()) dispatch({ type: "SET_STREAMING", isStreaming: false });
         return;
       }
 
       for (let ri = 0; ri < replies.length; ri++) {
-        if (gen !== genRef.current) return;
         const msg = replies[ri];
         const text = msg?.content || "";
         const msgId = msg?.id || uid();
 
+        // Always type and commit, but only show animation for latest gen
         for (let i = 1; i <= text.length; i++) {
-          if (gen !== genRef.current) return;
-          dispatch({ type: "SET_STREAMING", isStreaming: true, content: text.slice(0, i) });
+          if (isLatest()) dispatch({ type: "SET_STREAMING", isStreaming: true, content: text.slice(0, i) });
           await sleep(30 + Math.random() * 40);
         }
 
-        if (gen !== genRef.current) return;
+        // Always commit the message bubble
         dispatch({
           type: "ADD_MESSAGE",
           conversationId,
@@ -173,17 +173,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         });
 
         if (ri < replies.length - 1) {
-          dispatch({ type: "SET_STREAMING", isStreaming: false });
+          if (isLatest()) dispatch({ type: "SET_STREAMING", isStreaming: false });
           await sleep(1000 + Math.random() * 1500);
-          if (gen !== genRef.current) return;
-          dispatch({ type: "SET_STREAMING", isStreaming: true, content: "" });
+          if (isLatest()) dispatch({ type: "SET_STREAMING", isStreaming: true, content: "" });
         }
       }
 
-      if (gen === genRef.current) dispatch({ type: "SET_STREAMING", isStreaming: false });
+      if (isLatest()) dispatch({ type: "SET_STREAMING", isStreaming: false });
     } catch (e) {
       console.warn("sendMessage failed:", e);
-      if (gen === genRef.current) dispatch({ type: "SET_STREAMING", isStreaming: false });
+      if (isLatest()) dispatch({ type: "SET_STREAMING", isStreaming: false });
     }
   }, []);
 
