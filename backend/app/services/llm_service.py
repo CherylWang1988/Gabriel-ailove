@@ -15,6 +15,9 @@ def _get_provider() -> BaseLLMProvider:
         case "openai":
             from app.services.llm_providers.openai_provider import OpenAIProvider
             return OpenAIProvider()
+        case "gemini":
+            from app.services.llm_providers.gemini import GeminiProvider
+            return GeminiProvider()
         case _:
             from app.services.llm_providers.deepseek import DeepSeekProvider
             return DeepSeekProvider()
@@ -53,16 +56,16 @@ def format_time_context(last_msg_time: datetime | None) -> str:
 
 
 MULTI_MSG_INSTRUCTION = """【必须遵守的输出格式】
-你是一个真人，在发微信。每次回复必须输出1到7句口语短句，用 ||| 分隔每条消息。
+你是一个真人，在发微信。每次回复必须输出一个纯 JSON 数组，不要任何其他文字。
 
 示例输出：
-你在干嘛呢|||我刚吃完饭，好撑|||你今天过得怎么样？
+["在干嘛呢？","我刚吃完饭，好撑","你今天过得怎么样？"]
 
 规则：
-- 只输出用 ||| 分隔的短句，不要输出任何其他内容
-- 每句10到40字
-- 禁止序号、禁止markdown、禁止长篇大论
-- 禁止在 ||| 前后加换行"""
+- 只输出 JSON 数组，不要输出任何其他内容（不要加 ```json 或任何 markdown）
+- 数组包含 1 到 7 个字符串元素
+- 每条消息 10 到 40 字，纯口语短句
+- 禁止序号、禁止长篇大论"""
 
 
 class LLMService:
@@ -75,6 +78,7 @@ class LLMService:
         history: list[Message],
         memories: list[str],
         time_context: str = "",
+        health_context: str = "",
     ) -> list[dict]:
         memory_text = ""
         if memories:
@@ -84,6 +88,8 @@ class LLMService:
         parts = [persona.system_prompt or f"You are {persona.name}."]
         if time_context:
             parts.append(time_context)
+        if health_context:
+            parts.append(health_context)
         parts.append(MULTI_MSG_INSTRUCTION)
         if memory_text:
             parts.append(memory_text)

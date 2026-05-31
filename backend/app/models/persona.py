@@ -14,6 +14,7 @@ class Persona(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    persona_type: Mapped[str] = mapped_column(String(30), default="companion")  # companion | scenario
     personality_traits: Mapped[dict | None] = mapped_column(JSONB)
     avatar_url: Mapped[str | None] = mapped_column(String(500))
     system_prompt: Mapped[str | None] = mapped_column(Text)

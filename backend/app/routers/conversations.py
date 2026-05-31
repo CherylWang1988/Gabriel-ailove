@@ -8,6 +8,7 @@ from app.database import get_db
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.persona import Persona
+from app.models.user import User
 from app.schemas.conversation import ConversationCreate, ConversationOut, ConversationListItem
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
@@ -46,7 +47,11 @@ async def create_conversation(body: ConversationCreate, db: AsyncSession = Depen
     if not persona_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Persona not found")
 
-    conv = Conversation(persona_id=body.persona_id)
+    # Find default user
+    user_result = await db.execute(select(User).limit(1))
+    user = user_result.scalar_one_or_none()
+
+    conv = Conversation(persona_id=body.persona_id, user_id=user.id if user else None)
     db.add(conv)
     await db.commit()
     await db.refresh(conv)

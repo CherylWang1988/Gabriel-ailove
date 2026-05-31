@@ -31,7 +31,7 @@ function formatDate(iso: string): string {
 const GAP_MINUTES = 5;
 
 export default function ChatScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, title } = useLocalSearchParams<{ id: string; title?: string }>();
   const { state, loadMessages, sendMessage } = useChat();
   const flatListRef = useRef<FlatList>(null);
 
@@ -68,6 +68,20 @@ export default function ChatScreen() {
     }
   }, [id]);
 
+  // Sync health data silently on entering chat
+  useEffect(() => {
+    import("../../services/health").then(({ getHealthData, healthDataToMetrics }) => {
+      getHealthData().then((data) => {
+        const metrics = healthDataToMetrics(data);
+        if (metrics.length > 0) {
+          import("../../services/api").then(({ api }) => {
+            api.syncHealth({ metrics }).catch(() => {});
+          });
+        }
+      });
+    });
+  }, [id]);
+
   const scrollToBottom = useCallback(() => {
     setTimeout(() => {
       flatListRef.current?.scrollToEnd({ animated: true });
@@ -100,7 +114,7 @@ export default function ChatScreen() {
     >
       <Stack.Screen
         options={{
-          title: conversation?.title || "Chat",
+          title: title || conversation?.title || "Chat",
           headerStyle: { backgroundColor: "#1a1a2e" },
           headerTintColor: "#e0e0e0",
         }}

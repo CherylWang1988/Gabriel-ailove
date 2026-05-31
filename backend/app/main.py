@@ -1,14 +1,14 @@
 import os
-import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, text
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.config import settings
 from app.database import async_session, engine, Base
-from app.routers import personas, conversations, messages
+from app.routers import personas, conversations, messages, users, health, push
 
 
 async def seed_personas():
@@ -60,6 +60,9 @@ async def seed_personas():
                 if prompt_text:
                     system_prompt = prompt_text
 
+            # Determine persona type
+            persona_type = "scenario" if name.lower() in ("cuddle", "抱抱贴贴", "emotional-aid", "情绪急救") else "companion"
+
             # Check if persona exists
             result = await db.execute(select(Persona).where(Persona.name == name))
             existing = result.scalar_one_or_none()
@@ -67,6 +70,7 @@ async def seed_personas():
                 persona = Persona(
                     name=name,
                     description=description,
+                    persona_type=persona_type,
                     system_prompt=system_prompt,
                     personality_traits={
                         "tone": "warm",
@@ -86,7 +90,17 @@ async def lifespan(app: FastAPI):
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
     await seed_personas()
+
+    # Start APScheduler for proactive messaging
+    from app.services.proactive_service import run_proactive_check
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(run_proactive_check, "interval", minutes=90, id="proactive_check")
+    scheduler.start()
+    print("[scheduler] Proactive check started (every 90 min)")
+
     yield
+
+    scheduler.shutdown(wait=False)
 
 
 app = FastAPI(title="Gabriel API", version="0.1.0", lifespan=lifespan)
@@ -102,6 +116,9 @@ app.add_middleware(
 app.include_router(personas.router)
 app.include_router(conversations.router)
 app.include_router(messages.router)
+app.include_router(users.router)
+app.include_router(health.router)
+app.include_router(push.router)
 
 
 @app.get("/api/health")

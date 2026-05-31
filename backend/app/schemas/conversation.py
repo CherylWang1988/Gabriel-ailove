@@ -11,7 +11,9 @@ class ConversationCreate(BaseModel):
 class ConversationOut(BaseModel):
     id: uuid.UUID
     persona_id: uuid.UUID
+    user_id: uuid.UUID | None = None
     title: str | None
+    source: str = "app"
     message_count: int
     created_at: datetime
     updated_at: datetime
@@ -22,8 +24,10 @@ class ConversationOut(BaseModel):
 class ConversationListItem(BaseModel):
     id: uuid.UUID
     persona_id: uuid.UUID
+    user_id: uuid.UUID | None = None
     title: str | None
     last_message: str | None
+    source: str = "app"
     message_count: int
     updated_at: datetime
 

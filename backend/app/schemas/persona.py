@@ -8,6 +8,7 @@ class PersonaOut(BaseModel):
     id: uuid.UUID
     name: str
     description: str | None
+    persona_type: str = "companion"
     personality_traits: dict | None
     avatar_url: str | None
     created_at: datetime

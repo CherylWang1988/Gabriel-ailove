@@ -1,4 +1,11 @@
-import { Conversation, Message, Persona, SendMessageResponse } from "../types";
+import {
+  Conversation,
+  Message,
+  Persona,
+  User,
+  HealthSyncPayload,
+  SendMessageResponse,
+} from "../types";
 
 const BASE_URL = process.env.EXPO_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -15,28 +22,29 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  // ── Personas ──
   getPersonas: () => request<Persona[]>("/api/personas"),
-
   getPersona: (id: string) => request<Persona>(`/api/personas/${id}`),
 
-  getConversations: () => request<Conversation[]>("/api/conversations"),
+  // ── Users ──
+  getUser: () => request<User>("/api/users/me"),
 
+  // ── Conversations ──
+  getConversations: () => request<Conversation[]>("/api/conversations"),
   createConversation: (personaId: string) =>
     request<Conversation>("/api/conversations", {
       method: "POST",
       body: JSON.stringify({ persona_id: personaId }),
     }),
+  getConversation: (id: string) => request<Conversation>(`/api/conversations/${id}`),
+  deleteConversation: (id: string) =>
+    request<void>(`/api/conversations/${id}`, { method: "DELETE" }),
 
-  getConversation: (id: string) =>
-    request<Conversation>(`/api/conversations/${id}`),
-
+  // ── Messages ──
   getMessages: (conversationId: string, offset = 0, limit = 50) =>
     request<Message[]>(
       `/api/conversations/${conversationId}/messages?offset=${offset}&limit=${limit}`
     ),
-
-  deleteConversation: (id: string) =>
-    request<void>(`/api/conversations/${id}`, { method: "DELETE" }),
 
   sendMessage: async (
     conversationId: string,
@@ -56,4 +64,18 @@ export const api = {
     }
     return res.json();
   },
+
+  // ── Health ──
+  syncHealth: (payload: HealthSyncPayload) =>
+    request<void>("/api/health/sync", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  // ── Push ──
+  registerPush: (token: string, platform: string = "ios") =>
+    request<void>("/api/push/register", {
+      method: "POST",
+      body: JSON.stringify({ token, platform }),
+    }),
 };

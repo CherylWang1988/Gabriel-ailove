@@ -16,6 +16,7 @@ from app.models.persona import Persona
 from app.schemas.message import MessageCreate, MessageOut
 from app.services.llm_service import LLMService, format_time_context
 from app.services.memory_service import MemoryService
+from app.services.health_context import build_health_context
 
 router = APIRouter(prefix="/api/conversations", tags=["messages"])
 
@@ -84,6 +85,11 @@ async def send_message(
     memory_service = MemoryService()
     relevant_memories = await memory_service.retrieve(body.content, db)
 
+    # Build health context
+    health_context = ""
+    if conv.user_id:
+        health_context = await build_health_context(str(conv.user_id), db)
+
     # Build context
     llm_service = LLMService()
     context_messages = llm_service.build_context(
@@ -91,6 +97,7 @@ async def send_message(
         history=history,
         memories=relevant_memories,
         time_context=time_context,
+        health_context=health_context,
     )
 
     if not stream:
@@ -105,26 +112,43 @@ async def send_message(
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-        # Split response into multiple messages
-        import re
+        # Parse JSON array response
+        import json as json_mod
         raw = full_response.strip()
 
-        # 1. Try ||| delimiter
-        parts = [p.strip() for p in raw.split("|||") if p.strip() and len(p.strip()) >= 2]
+        # Strip markdown code fence if present
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1]
+            if raw.endswith("```"):
+                raw = raw[:-3]
+            raw = raw.strip()
 
-        # 2. Fallback: split by sentence-ending punctuation
-        if len(parts) <= 1:
-            parts = [p.strip() for p in re.split(r'(?<=[。！？.!?\n])', raw) if p.strip() and len(p.strip()) >= 2]
+        try:
+            parts = json_mod.loads(raw)
+            if not isinstance(parts, list):
+                parts = [raw]
+        except (json_mod.JSONDecodeError, ValueError):
+            # Fallback: try harder — extract JSON array from mixed text
+            import re
+            start = raw.find("[")
+            end = raw.rfind("]")
+            if start >= 0 and end > start:
+                try:
+                    parts = json_mod.loads(raw[start:end + 1])
+                except (json_mod.JSONDecodeError, ValueError):
+                    parts = [raw]
+            else:
+                # Last resort: split by sentence-ending punctuation
+                parts = [p.strip() for p in re.split(r'(?<=[。！？.!?\n])', raw) if p.strip() and len(p.strip()) >= 2]
+                if not parts:
+                    parts = [raw]
 
-        # 3. Fallback: force split long unpunctuated text at ~25-35 chars
-        if len(parts) <= 1 and len(raw) > 30:
-            chunk = 30
-            parts = [raw[i:i+chunk].strip() for i in range(0, len(raw), chunk) if raw[i:i+chunk].strip() and len(raw[i:i+chunk].strip()) >= 2]
-
+        # Filter: remove empty or too-short parts
+        parts = [p for p in parts if isinstance(p, str) and len(p.strip()) >= 2]
         if not parts:
             parts = [raw]
 
-        print(f"[split] raw_len={len(raw)}, parts={len(parts)}")
+        print(f"[json_split] raw_len={len(raw)}, parts={len(parts)}")
 
         saved_messages = []
         async with async_session() as save_db:

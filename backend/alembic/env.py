@@ -8,7 +8,7 @@ load_dotenv()
 
 from app.config import settings
 from app.database import Base
-from app.models import Persona, Conversation, Message, MemoryEmbedding
+from app.models import Persona, User, Conversation, Message, MemoryEmbedding, HealthMetric, ProactiveLog, PushToken
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url_sync)
