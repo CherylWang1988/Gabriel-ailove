@@ -18,6 +18,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     const text = await res.text();
     throw new Error(`${res.status}: ${text}`);
   }
+  // ✅ Handle 204 No Content responses
+  if (res.status === 204) {
+    return undefined as unknown as T;
+  }
   return res.json();
 }
 
@@ -56,6 +60,26 @@ export const api = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content }),
+      }
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`${res.status}: ${text}`);
+    }
+    return res.json();
+  },
+
+  // Send without saving user message (already saved via save_only)
+  replyToMessages: async (
+    conversationId: string,
+    content: string
+  ): Promise<SendMessageResponse> => {
+    const res = await fetch(
+      `${BASE_URL}/api/conversations/${conversationId}/messages?stream=false`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, reply_only: true }),
       }
     );
     if (!res.ok) {

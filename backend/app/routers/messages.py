@@ -56,15 +56,21 @@ async def send_message(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    # ── Save user message ──
-    user_msg = Message(conversation_id=conv_id, role="user", content=body.content)
-    conv.message_count += 1
+    # ── Save user message (skip if reply_only — already saved by prior save_only call) ──
+    user_msg = None
+    if not body.reply_only:
+        user_msg = Message(conversation_id=conv_id, role="user", content=body.content)
+        conv.message_count += 1
 
-    if conv.title is None:
-        conv.title = body.content[:50] + ("..." if len(body.content) > 50 else "")
+        if conv.title is None:
+            conv.title = body.content[:50] + ("..." if len(body.content) > 50 else "")
 
-    db.add(user_msg)
-    await db.commit()  # commit so LLM context includes the user message
+        db.add(user_msg)
+        await db.commit()
+
+    # save_only: persist and return immediately, no AI reply
+    if body.save_only:
+        return {"messages": [{"id": str(user_msg.id), "content": body.content, "role": "user"}]}
 
     # ── Load context ──
     persona_result = await db.execute(select(Persona).where(Persona.id == conv.persona_id))

@@ -6,6 +6,8 @@ from pydantic import BaseModel
 
 class MessageCreate(BaseModel):
     content: str
+    save_only: bool = False   # 仅保存消息，不生成AI回复
+    reply_only: bool = False  # 仅生成AI回复（消息已保存），不重复存用户消息
 
 
 class MessageOut(BaseModel):

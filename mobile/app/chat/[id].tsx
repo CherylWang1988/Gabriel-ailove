@@ -151,7 +151,10 @@ export default function ChatScreen() {
         }
       />
 
-      <ChatInput onSend={handleSend} disabled={false} />
+      <ChatInput 
+        onSend={handleSend}
+        disabled={state.isStreaming}
+      />
     </KeyboardAvoidingView>
   );
 }
