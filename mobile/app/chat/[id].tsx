@@ -134,6 +134,7 @@ export default function ChatScreen() {
       <FlatList
         ref={flatListRef}
         data={messages}
+        extraData={[rawMessages.length, state.isStreaming]}
         keyExtractor={(item) => item.key}
         renderItem={renderItem}
         contentContainerStyle={styles.messageList}

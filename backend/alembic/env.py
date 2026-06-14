@@ -11,7 +11,9 @@ from app.database import Base
 from app.models import Persona, User, Conversation, Message, MemoryEmbedding, HealthMetric, ProactiveLog, PushToken
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url_sync)
+# Use raw access to avoid ConfigParser % interpolation issues with DB passwords
+config.file_config.set(config.config_ini_section, "sqlalchemy.url",
+                        settings.database_url_sync.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

@@ -91,6 +91,11 @@ const ChatContext = createContext<{
 export function ChatProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(chatReducer, initialState);
   const genRef = useRef(0);
+  // Ref mirror of state.messages — always up-to-date, no stale closure
+  const messagesRef = useRef<Record<string, Message[]>>({});
+
+  // Keep messagesRef in sync with state.messages after every render
+  messagesRef.current = state.messages;
 
   const clearError = useCallback(() => {
     dispatch({ type: "SET_ERROR", error: null });
@@ -162,6 +167,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const sendMessage = useCallback(async (conversationId: string, content: string) => {
     const gen = ++genRef.current;
+    const isLatest = () => gen === genRef.current;
+
+    // Build accumulated list from ref (not state — avoids stale closure!)
+    const existing = messagesRef.current[conversationId] || [];
+    const seenIds = new Set(existing.map((m) => m.id));
 
     const userMsg: Message = {
       id: uid(),
@@ -170,9 +180,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       content,
       created_at: new Date().toISOString(),
     };
-    dispatch({ type: "ADD_MESSAGE", conversationId, message: userMsg });
+    const accumulated: Message[] = [...existing, userMsg];
+    seenIds.add(userMsg.id);
+    dispatch({ type: "SET_MESSAGES", conversationId, messages: accumulated });
 
-    const isLatest = () => gen === genRef.current;
     if (isLatest()) dispatch({ type: "SET_STREAMING", isStreaming: true, content: "" });
 
     try {
@@ -184,32 +195,42 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
 
       for (let ri = 0; ri < replies.length; ri++) {
+        if (!isLatest()) return; // abort stale generation
+
         const msg = replies[ri];
         const text = msg?.content || "";
         const msgId = msg?.id || uid();
 
-        // Typewriter animation — only for latest generation
+        // Skip if somehow duplicate
+        if (seenIds.has(msgId)) continue;
+        seenIds.add(msgId);
+
+        // Typewriter animation
         for (let i = 1; i <= text.length; i++) {
-          if (isLatest()) dispatch({ type: "SET_STREAMING", isStreaming: true, content: text.slice(0, i) });
+          if (!isLatest()) return;
+          dispatch({ type: "SET_STREAMING", isStreaming: true, content: text.slice(0, i) });
           await sleep(30 + Math.random() * 40);
         }
 
-        dispatch({
-          type: "ADD_MESSAGE",
-          conversationId,
-          message: {
-            id: msgId,
-            conversation_id: conversationId,
-            role: "assistant" as const,
-            content: text,
-            created_at: new Date().toISOString(),
-          },
-        });
+        // Append to accumulated list
+        const assistantMsg: Message = {
+          id: msgId,
+          conversation_id: conversationId,
+          role: "assistant" as const,
+          content: text,
+          created_at: new Date().toISOString(),
+        };
+        accumulated.push(assistantMsg);
+
+        // Dispatch FULL list — never lose previous messages
+        dispatch({ type: "SET_MESSAGES", conversationId, messages: [...accumulated] });
 
         if (ri < replies.length - 1) {
-          if (isLatest()) dispatch({ type: "SET_STREAMING", isStreaming: false });
+          if (!isLatest()) return;
+          dispatch({ type: "SET_STREAMING", isStreaming: false });
           await sleep(1000 + Math.random() * 1500);
-          if (isLatest()) dispatch({ type: "SET_STREAMING", isStreaming: true, content: "" });
+          if (!isLatest()) return;
+          dispatch({ type: "SET_STREAMING", isStreaming: true, content: "" });
         }
       }
 

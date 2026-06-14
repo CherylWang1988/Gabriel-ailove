@@ -9,7 +9,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.config import settings, setup_logging
 from app.database import async_session, engine, Base
-from app.routers import personas, conversations, messages, users, health, push
+from app.routers import personas, conversations, messages, users, health, push, wechat
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -91,13 +91,21 @@ async def lifespan(app: FastAPI):
 
     # Start APScheduler for proactive messaging
     from app.services.proactive_service import run_proactive_check
+    from app.services.wechat_bot import get_bot
     scheduler = AsyncIOScheduler()
     scheduler.add_job(run_proactive_check, "interval", minutes=90, id="proactive_check")
     scheduler.start()
     logger.info("Scheduler started: proactive check every 90 min")
 
+    # Start WeChat Bot (with LLM callback wired)
+    from app.services.wechat_service import WeChatMessageService
+    wechat_service = WeChatMessageService()
+    wechat_bot = get_bot(on_message=wechat_service.process)
+    await wechat_bot.start()
+
     yield
 
+    await wechat_bot.stop()
     scheduler.shutdown(wait=False)
     logger.info("Gabriel API shut down")
 
@@ -118,6 +126,7 @@ app.include_router(messages.router)
 app.include_router(users.router)
 app.include_router(health.router)
 app.include_router(push.router)
+app.include_router(wechat.router)
 
 
 @app.get("/api/health")

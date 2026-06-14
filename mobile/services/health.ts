@@ -19,7 +19,11 @@ export async function getHealthData(): Promise<HealthData> {
   }
 
   try {
-    const AppleHealthKit = require("react-native-health").default;
+    const AppleHealthKit = require("react-native-health");
+    if (!AppleHealthKit?.initHealthKit) {
+      console.warn("[health] AppleHealthKit not available");
+      return { steps: null, sleepMinutes: null, heartRate: null };
+    }
     return new Promise((resolve) => {
       const permissions = AppleHealthKit.Constants.Permissions;
 

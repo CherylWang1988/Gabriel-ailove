@@ -52,6 +52,7 @@ export default function ConversationListScreen() {
     <View style={styles.container}>
       <FlatList
         data={state.conversations}
+        extraData={state.conversations.length}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
           <ConversationItem
