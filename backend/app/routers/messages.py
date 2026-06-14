@@ -119,7 +119,8 @@ async def send_message(
             len(parts), len(full_response), conversation_id,
         )
 
-        saved_messages = []
+        # ✅ 改进：在 commit 前收集消息对象，commit 后再提取 ID
+        message_objects = []
         for part in parts:
             assistant_msg = Message(
                 conversation_id=conv_id,
@@ -128,9 +129,16 @@ async def send_message(
             )
             db.add(assistant_msg)
             conv.message_count += 1
-            saved_messages.append({"id": str(assistant_msg.id), "content": part})
+            message_objects.append(assistant_msg)
 
+        # commit 后 ID 才由数据库生成
         await db.commit()
+        
+        # ✅ 现在 ID 已可用
+        saved_messages = [
+            {"id": str(msg.id), "content": msg.content}
+            for msg in message_objects
+        ]
 
         # Extract memories (uses the same db session)
         await memory_service.extract_and_store(
@@ -151,23 +159,31 @@ async def send_message(
                 full_response += token
                 yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
 
-            # Save assistant message (streaming uses a fresh session for isolation)
+            # ✅ 改进：流式响应中也要正确解析多条消息
+            parts = parse_llm_response(full_response.strip())
+            logger.info(
+                "Parsed %d message parts from streaming response (raw_len=%d) for conversation %s",
+                len(parts), len(full_response), conversation_id,
+            )
+            
+            # Save assistant messages (streaming uses a fresh session for isolation)
             from app.database import async_session
             async with async_session() as save_db:
-                assistant_msg = Message(
-                    conversation_id=conv_id,
-                    role="assistant",
-                    content=full_response,
-                )
-                save_db.add(assistant_msg)
-
-                conv_result = await save_db.execute(
-                    select(Conversation).where(Conversation.id == conv_id)
-                )
-                save_conv = conv_result.scalar_one()
-                save_conv.message_count += 1
-
+                message_objects = []
+                for part in parts:
+                    assistant_msg = Message(
+                        conversation_id=conv_id,
+                        role="assistant",
+                        content=part,
+                    )
+                    save_db.add(assistant_msg)
+                    conv.message_count += 1
+                    message_objects.append(assistant_msg)
+                
                 await save_db.commit()
+                
+                for msg_obj in message_objects:
+                    yield f"data: {json.dumps({'type': 'message', 'id': str(msg_obj.id), 'content': msg_obj.content})}\n\n"
 
                 await memory_service.extract_and_store(
                     user_content=body.content,
@@ -177,7 +193,7 @@ async def send_message(
                     llm_service=llm_service,
                 )
 
-                yield f"data: {json.dumps({'type': 'done', 'message_id': str(assistant_msg.id)})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'count': len(message_objects)})}\n\n"
 
         except Exception as e:
             logger.error("Streaming error for conversation %s: %s", conversation_id, e)

@@ -58,7 +58,9 @@ class Settings(BaseSettings):
     deepseek_base_url: str = Field(default="")
 
     # Google Gemini
+    google_api_key: str = Field(default="", alias="google_api_key")
     gemini_api_key: str = Field(default="")
+    gemini_base_url: str = Field(default="")
     gemini_model: str = Field(default="gemini-2.5-flash")
 
     # Anthropic Claude
@@ -83,17 +85,18 @@ class Settings(BaseSettings):
     short_term_memory_size: int = Field(default=20, ge=1)
     long_term_memory_top_k: int = Field(default=5, ge=1)
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = {
+        "extra": "ignore",
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+    }
 
     @model_validator(mode="after")
     def validate_llm_provider_key(self) -> "Settings":
-        """Warn (not error) when the selected provider's API key is unset.
+        # If google_api_key is set but gemini_api_key isn't, use it as fallback
+        if self.google_api_key and not self.gemini_api_key:
+            object.__setattr__(self, "gemini_api_key", self.google_api_key)
 
-        Raises ValueError only when *all* providers are missing keys — the app
-        genuinely cannot work.
-        """
         provider = self.llm_provider
         key_map: dict[str, str] = {
             "deepseek": self.deepseek_api_key,

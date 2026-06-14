@@ -194,16 +194,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      const processedMsgIds = new Set<string>();
+      
       for (let ri = 0; ri < replies.length; ri++) {
-        if (!isLatest()) return; // abort stale generation
+        if (!isLatest()) return;
 
         const msg = replies[ri];
         const text = msg?.content || "";
         const msgId = msg?.id || uid();
 
         // Skip if somehow duplicate
-        if (seenIds.has(msgId)) continue;
-        seenIds.add(msgId);
+        if (processedMsgIds.has(msgId)) continue;
+        processedMsgIds.add(msgId);
 
         // Typewriter animation
         for (let i = 1; i <= text.length; i++) {
@@ -213,14 +215,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }
 
         // Append to accumulated list
-        const assistantMsg: Message = {
-          id: msgId,
-          conversation_id: conversationId,
-          role: "assistant" as const,
-          content: text,
-          created_at: new Date().toISOString(),
-        };
-        accumulated.push(assistantMsg);
+        if (!seenIds.has(msgId)) {
+          const assistantMsg: Message = {
+            id: msgId,
+            conversation_id: conversationId,
+            role: "assistant" as const,
+            content: text,
+            created_at: new Date().toISOString(),
+          };
+          accumulated.push(assistantMsg);
+          seenIds.add(msgId);
+        }
 
         // Dispatch FULL list — never lose previous messages
         dispatch({ type: "SET_MESSAGES", conversationId, messages: [...accumulated] });
