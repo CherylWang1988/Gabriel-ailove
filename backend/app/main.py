@@ -1,3 +1,4 @@
+import logging
 import os
 from contextlib import asynccontextmanager
 
@@ -6,9 +7,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, text
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from app.config import settings
+from app.config import settings, setup_logging
 from app.database import async_session, engine, Base
 from app.routers import personas, conversations, messages, users, health, push
+
+setup_logging()
+logger = logging.getLogger(__name__)
 
 
 async def seed_personas():
@@ -17,6 +21,7 @@ async def seed_personas():
 
     personas_dir = os.path.join(os.path.dirname(__file__), "..", "personas")
     if not os.path.isdir(personas_dir):
+        logger.warning("Personas directory not found: %s", personas_dir)
         return
 
     async with async_session() as db:
@@ -34,24 +39,11 @@ async def seed_personas():
 
             # Simple markdown parser
             for line in content.split("\n"):
-                if line.startswith("## Description"):
-                    continue
-                if line.startswith("## System Prompt"):
-                    continue
-                if line.startswith("## Personality Traits"):
-                    continue
                 if line.startswith("#"):
                     name = line.strip("# ").strip()
-                elif line.startswith("- "):
-                    continue
-                elif line.strip() and not line.startswith("##"):
-                    if not description and not line.startswith("**"):
+                elif line.strip() and not line.startswith("##") and not line.startswith("- "):
+                    if not description:
                         description = line.strip()
-                    elif "你是" in line or "你" in line:
-                        if not system_prompt:
-                            system_prompt = line.strip()
-                        else:
-                            system_prompt += "\n" + line.strip()
 
             # Full prompt extraction
             prompt_start = content.find("## System Prompt")
@@ -61,9 +53,12 @@ async def seed_personas():
                     system_prompt = prompt_text
 
             # Determine persona type
-            persona_type = "scenario" if name.lower() in ("cuddle", "抱抱贴贴", "emotional-aid", "情绪急救") else "companion"
+            persona_type = (
+                "scenario"
+                if name.lower() in ("cuddle", "抱抱贴贴", "emotional-aid", "情绪急救")
+                else "companion"
+            )
 
-            # Check if persona exists
             result = await db.execute(select(Persona).where(Persona.name == name))
             existing = result.scalar_one_or_none()
             if not existing:
@@ -79,13 +74,16 @@ async def seed_personas():
                     },
                 )
                 db.add(persona)
+                logger.info("Seeded persona: %s (%s)", name, persona_type)
 
         await db.commit()
+        logger.info("Persona seeding complete")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: ensure pgvector extension + tables + seed
+    logger.info("Starting Gabriel API v%s...", app.version)
+
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
@@ -96,11 +94,12 @@ async def lifespan(app: FastAPI):
     scheduler = AsyncIOScheduler()
     scheduler.add_job(run_proactive_check, "interval", minutes=90, id="proactive_check")
     scheduler.start()
-    print("[scheduler] Proactive check started (every 90 min)")
+    logger.info("Scheduler started: proactive check every 90 min")
 
     yield
 
     scheduler.shutdown(wait=False)
+    logger.info("Gabriel API shut down")
 
 
 app = FastAPI(title="Gabriel API", version="0.1.0", lifespan=lifespan)
@@ -122,5 +121,5 @@ app.include_router(push.router)
 
 
 @app.get("/api/health")
-async def health():
+async def health_check():
     return {"status": "ok"}

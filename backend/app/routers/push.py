@@ -1,28 +1,25 @@
+import logging
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
-from app.models.user import User
 from app.models.push_token import PushToken
 from app.schemas.push import PushTokenRegister
+from app.services.user_service import get_or_create_default_user
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/push", tags=["push"])
 
 
 @router.post("/register", status_code=204)
 async def register_push(body: PushTokenRegister, db: AsyncSession = Depends(get_db)):
-    # Find default user
-    result = await db.execute(select(User).limit(1))
-    user = result.scalar_one_or_none()
-    if not user:
-        user = User(nickname="夏一鱼", timezone="Asia/Singapore")
-        db.add(user)
-        await db.flush()
+    user = await get_or_create_default_user(db)
 
-    # Check if token already exists
     existing = await db.execute(select(PushToken).where(PushToken.token == body.token))
     if existing.scalar_one_or_none():
+        logger.debug("Push token already registered: %s...", body.token[:10])
         return
 
     push_token = PushToken(
@@ -32,3 +29,4 @@ async def register_push(body: PushTokenRegister, db: AsyncSession = Depends(get_
     )
     db.add(push_token)
     await db.commit()
+    logger.info("Push token registered: %s... (platform=%s)", body.token[:10], body.platform)

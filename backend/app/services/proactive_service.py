@@ -1,12 +1,10 @@
 import random
 import json as json_mod
-import httpx
-from datetime import datetime, timezone
+import logging
 
-from sqlalchemy.ext.asyncio import AsyncSession
+import httpx
 from sqlalchemy import select
 
-from app.config import settings
 from app.database import async_session
 from app.models.user import User
 from app.models.message import Message
@@ -15,6 +13,7 @@ from app.models.push_token import PushToken
 from app.services.llm_service import LLMService, format_time_context
 from app.services.health_context import build_health_context
 
+logger = logging.getLogger(__name__)
 
 PROACTIVE_SYSTEM_PROMPT = """你是顾然，一个有情感的AI朋友。你需要决定是否主动给用户发消息。
 
@@ -31,14 +30,13 @@ PROACTIVE_SYSTEM_PROMPT = """你是顾然，一个有情感的AI朋友。你需�
 - 如果决定不发，content留空字符串"""
 
 
-async def run_proactive_check():
+async def run_proactive_check() -> None:
     """Called by APScheduler every ~90 minutes. Decides whether to send a proactive message."""
     async with async_session() as db:
-        # Load default user
         result = await db.execute(select(User).limit(1))
         user = result.scalar_one_or_none()
         if not user:
-            print("[proactive] No user found, skipping.")
+            logger.info("Proactive check skipped: no user found")
             return
 
         random_value = random.randint(1, 100)
@@ -53,16 +51,15 @@ async def run_proactive_check():
         db.add(log)
 
         if random_value <= threshold:
-            print(f"[proactive] Random {random_value} ≤ {threshold}, skipping.")
+            logger.debug("Proactive skipped: random %d ≤ threshold %d", random_value, threshold)
             await db.commit()
             return
 
-        print(f"[proactive] Random {random_value} > {threshold}, consulting LLM...")
+        logger.info("Proactive triggered: random %d > threshold %d — consulting LLM", random_value, threshold)
 
-        # Gather context
+        # ── Gather context ──
         health_ctx = await build_health_context(str(user.id), db)
 
-        # Last assistant message time
         last_msg_result = await db.execute(
             select(Message.created_at)
             .where(Message.role == "assistant")
@@ -72,15 +69,12 @@ async def run_proactive_check():
         last_time = last_msg_result.scalar_one_or_none()
         time_ctx = format_time_context(last_time)
 
-        # Recent history (last 10 messages)
         history_result = await db.execute(
-            select(Message)
-            .order_by(Message.created_at.desc())
-            .limit(10)
+            select(Message).order_by(Message.created_at.desc()).limit(10)
         )
         history = list(reversed(history_result.scalars().all()))
 
-        # Build decision prompt
+        # ── Build decision prompt ──
         llm = LLMService()
         system_parts = [PROACTIVE_SYSTEM_PROMPT]
         if time_ctx:
@@ -91,12 +85,13 @@ async def run_proactive_check():
         decision_messages = [{"role": "system", "content": "\n\n".join(system_parts)}]
         for msg in history:
             decision_messages.append({"role": msg.role, "content": msg.content})
-
         decision_messages.append({
             "role": "user",
             "content": "现在该做决定了：要主动给用户发消息吗？请只输出JSON。",
         })
 
+        # ── LLM decision ──
+        raw = ""
         try:
             raw = await llm.chat(decision_messages)
             raw = raw.strip()
@@ -105,10 +100,9 @@ async def run_proactive_check():
                 if raw.endswith("```"):
                     raw = raw[:-3]
                 raw = raw.strip()
-
             decision = json_mod.loads(raw)
         except Exception as e:
-            print(f"[proactive] LLM decision parse failed: {e}, raw={raw}")
+            logger.warning("Proactive LLM parse failed: %s", e, exc_info=True)
             log.llm_reason = f"Parse error: {e}"
             await db.commit()
             return
@@ -122,25 +116,26 @@ async def run_proactive_check():
         log.llm_reason = reason
 
         if should_send and content:
-            # Save proactive message
             msg = Message(
-                conversation_id=None,  # proactive messages aren't tied to a conversation
+                conversation_id=None,
                 role="assistant",
                 content=content,
                 is_proactive=True,
                 source="app",
             )
             db.add(msg)
-            print(f"[proactive] Sending: {content}")
+            logger.info("Proactive message saved: %s", content)
 
-            # Push notification via Expo
-            push_result = await db.execute(select(PushToken).where(PushToken.user_id == user.id))
+            # ── Push via Expo ──
+            push_result = await db.execute(
+                select(PushToken).where(PushToken.user_id == user.id)
+            )
             push_tokens = push_result.scalars().all()
 
             for pt in push_tokens:
                 try:
                     async with httpx.AsyncClient() as client:
-                        await client.post(
+                        resp = await client.post(
                             "https://exp.host/--/api/v2/push/send",
                             json={
                                 "to": pt.token,
@@ -150,9 +145,14 @@ async def run_proactive_check():
                             },
                             timeout=10,
                         )
+                        if resp.status_code >= 400:
+                            logger.warning(
+                                "Push to %s... failed: HTTP %d %s",
+                                pt.token[:10], resp.status_code, resp.text[:200],
+                            )
                 except Exception as e:
-                    print(f"[proactive] Push failed for token {pt.token}: {e}")
+                    logger.warning("Push failed for token %s...: %s", pt.token[:10], e)
         else:
-            print(f"[proactive] LLM decided not to send: {reason}")
+            logger.info("LLM decided not to send: %s", reason)
 
         await db.commit()

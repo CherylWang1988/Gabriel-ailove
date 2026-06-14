@@ -6,6 +6,7 @@ import {
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
+  TouchableOpacity,
 } from "react-native";
 import { useLocalSearchParams, Stack } from "expo-router";
 import { useChat } from "../../contexts/ChatContext";
@@ -32,7 +33,7 @@ const GAP_MINUTES = 5;
 
 export default function ChatScreen() {
   const { id, title } = useLocalSearchParams<{ id: string; title?: string }>();
-  const { state, loadMessages, sendMessage } = useChat();
+  const { state, loadMessages, sendMessage, clearError } = useChat();
   const flatListRef = useRef<FlatList>(null);
 
   const conversation = state.conversations.find((c) => c.id === id);
@@ -120,6 +121,16 @@ export default function ChatScreen() {
         }}
       />
 
+      {/* Error banner */}
+      {state.error && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorText}>{state.error}</Text>
+          <TouchableOpacity onPress={clearError} style={styles.errorClose}>
+            <Text style={styles.errorCloseText}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       <FlatList
         ref={flatListRef}
         data={messages}
@@ -162,5 +173,28 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 16,
     color: "#707070",
+  },
+  errorBanner: {
+    backgroundColor: "#e94560",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  errorText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "500",
+    flex: 1,
+  },
+  errorClose: {
+    paddingLeft: 12,
+    paddingVertical: 4,
+  },
+  errorCloseText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
   },
 });

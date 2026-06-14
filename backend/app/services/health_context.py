@@ -1,7 +1,10 @@
+import logging
 from datetime import datetime, timezone, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
+
+logger = logging.getLogger(__name__)
 
 
 async def build_health_context(user_id: str, db: AsyncSession) -> str:
@@ -29,7 +32,7 @@ async def build_health_context(user_id: str, db: AsyncSession) -> str:
         if mtype not in latest:
             latest[mtype] = (value, unit)
 
-    parts = []
+    parts: list[str] = []
     if "sleep" in latest:
         val, unit = latest["sleep"]
         hours = val / 60
@@ -44,4 +47,5 @@ async def build_health_context(user_id: str, db: AsyncSession) -> str:
     if not parts:
         return ""
 
+    logger.debug("Built health context for user %s: %d metrics", user_id, len(parts))
     return "[健康信息] 用户" + "，".join(parts) + "。"

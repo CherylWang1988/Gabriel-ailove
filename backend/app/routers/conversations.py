@@ -1,4 +1,4 @@
-import uuid
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,9 +8,10 @@ from app.database import get_db
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.persona import Persona
-from app.models.user import User
 from app.schemas.conversation import ConversationCreate, ConversationOut, ConversationListItem
+from app.services.user_service import get_or_create_default_user
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
 
@@ -47,14 +48,12 @@ async def create_conversation(body: ConversationCreate, db: AsyncSession = Depen
     if not persona_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Persona not found")
 
-    # Find default user
-    user_result = await db.execute(select(User).limit(1))
-    user = user_result.scalar_one_or_none()
-
-    conv = Conversation(persona_id=body.persona_id, user_id=user.id if user else None)
+    user = await get_or_create_default_user(db)
+    conv = Conversation(persona_id=body.persona_id, user_id=user.id)
     db.add(conv)
     await db.commit()
     await db.refresh(conv)
+    logger.debug("Conversation created: id=%s persona=%s", conv.id, body.persona_id)
     return conv
 
 
@@ -75,3 +74,4 @@ async def delete_conversation(conversation_id: str, db: AsyncSession = Depends(g
         raise HTTPException(status_code=404, detail="Conversation not found")
     await db.delete(conv)
     await db.commit()
+    logger.debug("Conversation deleted: id=%s", conversation_id)

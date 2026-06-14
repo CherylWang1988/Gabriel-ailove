@@ -13,6 +13,7 @@ interface ChatState {
   streamingContent: string;
   isStreaming: boolean;
   isLoading: boolean;
+  error: string | null;
 }
 
 type ChatAction =
@@ -23,7 +24,8 @@ type ChatAction =
   | { type: "SET_MESSAGES"; conversationId: string; messages: Message[] }
   | { type: "ADD_MESSAGE"; conversationId: string; message: Message }
   | { type: "SET_STREAMING"; isStreaming: boolean; content?: string }
-  | { type: "SET_LOADING"; isLoading: boolean };
+  | { type: "SET_LOADING"; isLoading: boolean }
+  | { type: "SET_ERROR"; error: string | null };
 
 function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
@@ -58,6 +60,8 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       };
     case "SET_LOADING":
       return { ...state, isLoading: action.isLoading };
+    case "SET_ERROR":
+      return { ...state, error: action.error };
     default:
       return state;
   }
@@ -70,10 +74,12 @@ const initialState: ChatState = {
   streamingContent: "",
   isStreaming: false,
   isLoading: false,
+  error: null,
 };
 
 const ChatContext = createContext<{
   state: ChatState;
+  clearError: () => void;
   loadPersona: () => Promise<void>;
   loadConversations: () => Promise<void>;
   loadMessages: (conversationId: string) => Promise<void>;
@@ -86,43 +92,72 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(chatReducer, initialState);
   const genRef = useRef(0);
 
+  const clearError = useCallback(() => {
+    dispatch({ type: "SET_ERROR", error: null });
+  }, []);
+
   const loadPersona = useCallback(async () => {
     try {
       const personas = await api.getPersonas();
       if (personas.length > 0) dispatch({ type: "SET_PERSONA", persona: personas[0] });
-    } catch (e) { console.warn(e); }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to load persona";
+      dispatch({ type: "SET_ERROR", error: msg });
+      console.error("loadPersona:", e);
+    }
   }, []);
 
   const loadConversations = useCallback(async () => {
     dispatch({ type: "SET_LOADING", isLoading: true });
     try {
       dispatch({ type: "SET_CONVERSATIONS", conversations: await api.getConversations() });
-    } catch (e) { console.warn(e); }
-    finally { dispatch({ type: "SET_LOADING", isLoading: false }); }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to load conversations";
+      dispatch({ type: "SET_ERROR", error: msg });
+      console.error("loadConversations:", e);
+    } finally {
+      dispatch({ type: "SET_LOADING", isLoading: false });
+    }
   }, []);
 
   const loadMessages = useCallback(async (conversationId: string) => {
     try {
       const msgs = await api.getMessages(conversationId);
       dispatch({ type: "SET_MESSAGES", conversationId, messages: msgs });
-    } catch (e) { console.warn(e); }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to load messages";
+      dispatch({ type: "SET_ERROR", error: msg });
+      console.error("loadMessages:", e);
+    }
   }, []);
 
   const createConversation = useCallback(async () => {
     try {
       const personas = await api.getPersonas();
-      if (personas.length === 0) return null;
+      if (personas.length === 0) {
+        dispatch({ type: "SET_ERROR", error: "No personas available" });
+        return null;
+      }
       const conv = await api.createConversation(personas[0].id);
       dispatch({ type: "ADD_CONVERSATION", conversation: conv });
       return conv;
-    } catch (e) { console.warn(e); return null; }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to create conversation";
+      dispatch({ type: "SET_ERROR", error: msg });
+      console.error("createConversation:", e);
+      return null;
+    }
   }, []);
 
   const deleteConversation = useCallback(async (id: string) => {
     try {
       await api.deleteConversation(id);
       dispatch({ type: "REMOVE_CONVERSATION", id });
-    } catch (e) { console.warn(e); }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to delete conversation";
+      dispatch({ type: "SET_ERROR", error: msg });
+      console.error("deleteConversation:", e);
+    }
   }, []);
 
   const sendMessage = useCallback(async (conversationId: string, content: string) => {
@@ -153,13 +188,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const text = msg?.content || "";
         const msgId = msg?.id || uid();
 
-        // Always type and commit, but only show animation for latest gen
+        // Typewriter animation — only for latest generation
         for (let i = 1; i <= text.length; i++) {
           if (isLatest()) dispatch({ type: "SET_STREAMING", isStreaming: true, content: text.slice(0, i) });
           await sleep(30 + Math.random() * 40);
         }
 
-        // Always commit the message bubble
         dispatch({
           type: "ADD_MESSAGE",
           conversationId,
@@ -181,13 +215,26 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       if (isLatest()) dispatch({ type: "SET_STREAMING", isStreaming: false });
     } catch (e) {
-      console.warn("sendMessage failed:", e);
+      const msg = e instanceof TypeError
+        ? "Network error — check your connection"
+        : e instanceof Error ? e.message : "Failed to send message";
+      dispatch({ type: "SET_ERROR", error: msg });
+      console.error("sendMessage:", e);
       if (isLatest()) dispatch({ type: "SET_STREAMING", isStreaming: false });
     }
   }, []);
 
   return (
-    <ChatContext.Provider value={{ state, loadPersona, loadConversations, loadMessages, createConversation, deleteConversation, sendMessage }}>
+    <ChatContext.Provider value={{
+      state,
+      clearError,
+      loadPersona,
+      loadConversations,
+      loadMessages,
+      createConversation,
+      deleteConversation,
+      sendMessage,
+    }}>
       {children}
     </ChatContext.Provider>
   );

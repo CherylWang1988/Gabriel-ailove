@@ -1,26 +1,20 @@
-import uuid
+import logging
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
 from app.database import get_db
-from app.models.user import User
 from app.models.health import HealthMetric
 from app.schemas.health import HealthSyncPayload
+from app.services.user_service import get_or_create_default_user
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/health", tags=["health"])
 
 
 @router.post("/sync", status_code=204)
 async def sync_health(body: HealthSyncPayload, db: AsyncSession = Depends(get_db)):
-    # Find default user
-    result = await db.execute(select(User).limit(1))
-    user = result.scalar_one_or_none()
-    if not user:
-        user = User(nickname="夏一鱼", timezone="Asia/Singapore")
-        db.add(user)
-        await db.flush()
+    user = await get_or_create_default_user(db)
 
     for item in body.metrics:
         metric = HealthMetric(
@@ -33,3 +27,4 @@ async def sync_health(body: HealthSyncPayload, db: AsyncSession = Depends(get_db
         db.add(metric)
 
     await db.commit()
+    logger.debug("Health sync: %d metrics stored for user %s", len(body.metrics), user.id)

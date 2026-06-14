@@ -29,7 +29,7 @@ export interface Conversation {
 
 export interface Message {
   id: string;
-  conversation_id: string;
+  conversation_id: string | null;  // null for proactive messages
   role: "user" | "assistant";
   content: string;
   is_proactive?: boolean;

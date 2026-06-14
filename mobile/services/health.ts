@@ -11,15 +11,15 @@ function todayISO(): string {
   return new Date().toISOString();
 }
 
+// ── Platform guard ──────────────────────────────────────────
+
 export async function getHealthData(): Promise<HealthData> {
   if (Platform.OS !== "ios") {
     return { steps: null, sleepMinutes: null, heartRate: null };
   }
 
   try {
-    // Dynamic import — react-native-health may not be installed yet
     const AppleHealthKit = require("react-native-health").default;
-
     return new Promise((resolve) => {
       const permissions = AppleHealthKit.Constants.Permissions;
 
@@ -34,51 +34,20 @@ export async function getHealthData(): Promise<HealthData> {
             write: [],
           },
         },
-        (err: string) => {
+        async (err: string) => {
           if (err) {
             console.warn("[health] HealthKit init error:", err);
             resolve({ steps: null, sleepMinutes: null, heartRate: null });
             return;
           }
 
-          // Fetch today's steps
-          const now = new Date();
-          const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-          AppleHealthKit.getStepCount(
-            { startDate: startOfDay.toISOString(), endDate: now.toISOString() },
-            (stepErr: string, stepResult: { value: number }) => {
-              const steps = stepErr ? null : Math.round(stepResult.value);
-
-              // Fetch sleep (yesterday's sleep)
-              const yesterdayStart = new Date(startOfDay.getTime() - 24 * 3600 * 1000);
-              AppleHealthKit.getSleepSamples(
-                { startDate: yesterdayStart.toISOString(), endDate: startOfDay.toISOString() },
-                (sleepErr: string, sleepResult: { value: number }[]) => {
-                  let sleepMinutes: number | null = null;
-                  if (!sleepErr && sleepResult && sleepResult.length > 0) {
-                    const totalSleep = sleepResult.reduce((sum, s) => sum + s.value, 0);
-                    sleepMinutes = Math.round(totalSleep);
-                  }
-
-                  // Fetch resting heart rate
-                  AppleHealthKit.getHeartRateSamples(
-                    { startDate: startOfDay.toISOString(), endDate: now.toISOString() },
-                    (hrErr: string, hrResult: { value: number }[]) => {
-                      let heartRate: number | null = null;
-                      if (!hrErr && hrResult && hrResult.length > 0) {
-                        const avgHR = hrResult.reduce((sum, h) => sum + h.value, 0) / hrResult.length;
-                        heartRate = Math.round(avgHR);
-                      }
-
-                      resolve({ steps, sleepMinutes, heartRate });
-                    }
-                  );
-                }
-              );
-            }
-          );
-        }
+          // Each query is isolated — single-level nesting
+          resolve({
+            steps: await fetchSteps(AppleHealthKit),
+            sleepMinutes: await fetchSleep(AppleHealthKit),
+            heartRate: await fetchHeartRate(AppleHealthKit),
+          });
+        },
       );
     });
   } catch (e) {
@@ -86,6 +55,65 @@ export async function getHealthData(): Promise<HealthData> {
     return { steps: null, sleepMinutes: null, heartRate: null };
   }
 }
+
+// ── Individual query helpers (each wraps one callback) ──────
+
+function fetchSteps(AppleHealthKit: any): Promise<number | null> {
+  return new Promise((resolve) => {
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    AppleHealthKit.getStepCount(
+      { startDate: startOfDay.toISOString(), endDate: now.toISOString() },
+      (err: string, result: { value: number }) => {
+        if (err) {
+          console.warn("[health] Steps fetch error:", err);
+          resolve(null);
+        } else {
+          resolve(Math.round(result.value));
+        }
+      },
+    );
+  });
+}
+
+function fetchSleep(AppleHealthKit: any): Promise<number | null> {
+  return new Promise((resolve) => {
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterdayStart = new Date(startOfDay.getTime() - 24 * 3600 * 1000);
+    AppleHealthKit.getSleepSamples(
+      { startDate: yesterdayStart.toISOString(), endDate: startOfDay.toISOString() },
+      (err: string, result: { value: number }[]) => {
+        if (err || !result || result.length === 0) {
+          resolve(null);
+        } else {
+          const total = result.reduce((sum, s) => sum + s.value, 0);
+          resolve(Math.round(total));
+        }
+      },
+    );
+  });
+}
+
+function fetchHeartRate(AppleHealthKit: any): Promise<number | null> {
+  return new Promise((resolve) => {
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    AppleHealthKit.getHeartRateSamples(
+      { startDate: startOfDay.toISOString(), endDate: now.toISOString() },
+      (err: string, result: { value: number }[]) => {
+        if (err || !result || result.length === 0) {
+          resolve(null);
+        } else {
+          const avg = result.reduce((sum, h) => sum + h.value, 0) / result.length;
+          resolve(Math.round(avg));
+        }
+      },
+    );
+  });
+}
+
+// ── Data → metrics conversion ───────────────────────────────
 
 export function healthDataToMetrics(data: HealthData): HealthMetric[] {
   const now = todayISO();
