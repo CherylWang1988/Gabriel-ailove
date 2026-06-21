@@ -34,11 +34,12 @@ async def list_messages(
     result = await db.execute(
         select(Message)
         .where(Message.conversation_id == conversation_id)
-        .order_by(Message.created_at)
+        .order_by(Message.created_at.desc())
         .offset(offset)
         .limit(limit)
     )
-    return result.scalars().all()
+    msgs = result.scalars().all()
+    return list(reversed(msgs))
 
 
 @router.post("/{conversation_id}/messages")
@@ -48,7 +49,7 @@ async def send_message(
     stream: bool = True,
     db: AsyncSession = Depends(get_db),
 ):
-    """Send a message and get AI reply. All DB writes happen in one transaction."""
+    """Send a message and get AI reply."""
     conv_id = uuid.UUID(conversation_id)
 
     conv_result = await db.execute(select(Conversation).where(Conversation.id == conv_id))
@@ -56,10 +57,16 @@ async def send_message(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    # ── Save user message (skip if reply_only — already saved by prior save_only call) ──
+    # Save user message (skip if reply_only)
     user_msg = None
     if not body.reply_only:
-        user_msg = Message(conversation_id=conv_id, role="user", content=body.content)
+        user_msg = Message(
+            conversation_id=conv_id,
+            role="user",
+            content=body.content,
+            message_type=body.message_type,
+            media_url=body.media_url,
+        )
         conv.message_count += 1
 
         if conv.title is None:
@@ -68,11 +75,19 @@ async def send_message(
         db.add(user_msg)
         await db.commit()
 
-    # save_only: persist and return immediately, no AI reply
+    # FIX: only save_only skips AI reply; stickers/images now get replies too
     if body.save_only:
-        return {"messages": [{"id": str(user_msg.id), "content": body.content, "role": "user"}]}
+        return {
+            "messages": [{
+                "id": str(user_msg.id) if user_msg else "",
+                "content": body.content,
+                "role": "user",
+                "message_type": body.message_type,
+                "media_url": body.media_url,
+            }]
+        }
 
-    # ── Load context ──
+    # Load context
     persona_result = await db.execute(select(Persona).where(Persona.id == conv.persona_id))
     persona = persona_result.scalar_one_or_none()
 
@@ -106,7 +121,7 @@ async def send_message(
         health_context=health_context,
     )
 
-    # ── Non-streaming path ──
+    # Non-streaming path
     if not stream:
         delay = random.uniform(settings.pre_reply_delay_min, settings.pre_reply_delay_max)
         await asyncio.sleep(delay)
@@ -125,7 +140,6 @@ async def send_message(
             len(parts), len(full_response), conversation_id,
         )
 
-        # ✅ 改进：在 commit 前收集消息对象，commit 后再提取 ID
         message_objects = []
         for part in parts:
             assistant_msg = Message(
@@ -137,16 +151,13 @@ async def send_message(
             conv.message_count += 1
             message_objects.append(assistant_msg)
 
-        # commit 后 ID 才由数据库生成
         await db.commit()
-        
-        # ✅ 现在 ID 已可用
+
         saved_messages = [
-            {"id": str(msg.id), "content": msg.content}
+            {"id": str(msg.id), "content": msg.content, "created_at": msg.created_at.isoformat()}
             for msg in message_objects
         ]
 
-        # Extract memories (uses the same db session)
         await memory_service.extract_and_store(
             user_content=body.content,
             assistant_content=full_response,
@@ -157,7 +168,7 @@ async def send_message(
 
         return {"messages": saved_messages}
 
-    # ── Streaming path ──
+    # Streaming path
     async def event_stream():
         full_response = ""
         try:
@@ -165,14 +176,12 @@ async def send_message(
                 full_response += token
                 yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
 
-            # ✅ 改进：流式响应中也要正确解析多条消息
             parts = parse_llm_response(full_response.strip())
             logger.info(
                 "Parsed %d message parts from streaming response (raw_len=%d) for conversation %s",
                 len(parts), len(full_response), conversation_id,
             )
-            
-            # Save assistant messages (streaming uses a fresh session for isolation)
+
             from app.database import async_session
             async with async_session() as save_db:
                 message_objects = []
@@ -185,11 +194,11 @@ async def send_message(
                     save_db.add(assistant_msg)
                     conv.message_count += 1
                     message_objects.append(assistant_msg)
-                
+
                 await save_db.commit()
-                
+
                 for msg_obj in message_objects:
-                    yield f"data: {json.dumps({'type': 'message', 'id': str(msg_obj.id), 'content': msg_obj.content})}\n\n"
+                    yield f"data: {json.dumps({'type': 'message', 'id': str(msg_obj.id), 'content': msg_obj.content, 'created_at': msg_obj.created_at.isoformat()})}\n\n"
 
                 await memory_service.extract_and_store(
                     user_content=body.content,

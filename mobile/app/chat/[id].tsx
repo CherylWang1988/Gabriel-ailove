@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useMemo } from "react";
+import { useEffect, useRef, useCallback, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   TouchableOpacity,
+  InteractionManager,
 } from "react-native";
 import { useLocalSearchParams, Stack } from "expo-router";
 import { useChat } from "../../contexts/ChatContext";
@@ -15,6 +16,8 @@ import MessageBubble from "../../components/MessageBubble";
 import TypingIndicator from "../../components/TypingIndicator";
 import TimestampSeparator from "../../components/TimestampSeparator";
 import ChatInput from "../../components/ChatInput";
+import { getHealthData, healthDataToMetrics } from "../../services/health";
+import { api } from "../../services/api";
 
 type RenderItem =
   | { kind: "msg"; data: Message; key: string }
@@ -22,37 +25,56 @@ type RenderItem =
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
+  const now = new Date();
   const m = d.getMonth() + 1;
   const day = d.getDate();
   const h = String(d.getHours()).padStart(2, "0");
   const min = String(d.getMinutes()).padStart(2, "0");
-  return `${m}月${day}日 ${h}:${min}`;
+
+  // Same day: only show time
+  if (d.toDateString() === now.toDateString()) {
+    return `${h}:${min}`;
+  }
+  // Different day: show date + time
+  return `${m}/${day} ${h}:${min}`;
 }
 
-const GAP_MINUTES = 5;
+const GAP_MINUTES = 10;
 
 export default function ChatScreen() {
   const { id, title } = useLocalSearchParams<{ id: string; title?: string }>();
-  const { state, loadMessages, sendMessage, clearError } = useChat();
+  const { state, loadMessages, sendMessage, sendSticker, clearError } = useChat();
   const flatListRef = useRef<FlatList>(null);
 
   const conversation = state.conversations.find((c) => c.id === id);
   const rawMessages = state.messages[id] || [];
+  const isStreaming = state.isStreaming[id] || false;
+  const streamingContent = state.streamingContent[id] || "";
+  const [panelVisible, setPanelVisible] = useState(false);
 
-  // Inject timestamp separators between messages with gap > 5 min
+  // Inject timestamp separators for date changes or long gaps
   const messages = useMemo(() => {
     const out: RenderItem[] = [];
     for (let i = 0; i < rawMessages.length; i++) {
       if (i > 0) {
-        const prev = new Date(rawMessages[i - 1].created_at).getTime();
-        const curr = new Date(rawMessages[i].created_at).getTime();
-        if (curr - prev > GAP_MINUTES * 60 * 1000) {
+        const prev = new Date(rawMessages[i - 1].created_at);
+        const curr = new Date(rawMessages[i].created_at);
+        const diffMs = curr.getTime() - prev.getTime();
+        const isNewDay = prev.toDateString() !== curr.toDateString();
+        if (isNewDay || diffMs > GAP_MINUTES * 60 * 1000) {
           out.push({
             kind: "ts",
             text: formatDate(rawMessages[i].created_at),
             key: `ts-${i}`,
           });
         }
+      } else {
+        // First message always shows its date/time
+        out.push({
+          kind: "ts",
+          text: formatDate(rawMessages[i].created_at),
+          key: `ts-first`,
+        });
       }
       out.push({
         kind: "msg",
@@ -71,16 +93,15 @@ export default function ChatScreen() {
 
   // Sync health data silently on entering chat
   useEffect(() => {
-    import("../../services/health").then(({ getHealthData, healthDataToMetrics }) => {
+    const handle = InteractionManager.runAfterInteractions(() => {
       getHealthData().then((data) => {
         const metrics = healthDataToMetrics(data);
         if (metrics.length > 0) {
-          import("../../services/api").then(({ api }) => {
-            api.syncHealth({ metrics }).catch(() => {});
-          });
+          api.syncHealth({ metrics }).catch(() => {});
         }
       });
     });
+    return () => handle.cancel();
   }, [id]);
 
   const scrollToBottom = useCallback(() => {
@@ -91,11 +112,19 @@ export default function ChatScreen() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [rawMessages.length, state.streamingContent]);
+  }, [rawMessages.length, streamingContent, panelVisible]);
+
+  const handlePanelToggle = useCallback((visible: boolean) => {
+    setPanelVisible(visible);
+  }, []);
 
   const handleSend = async (content: string) => {
     if (!content.trim()) return;
     await sendMessage(id!, content);
+  };
+
+  const handleSendSticker = async (sticker: { id: string; url: string; label: string }) => {
+    await sendSticker(id!, sticker);
   };
 
   const renderItem = useCallback(({ item }: { item: RenderItem }) => {
@@ -116,17 +145,18 @@ export default function ChatScreen() {
       <Stack.Screen
         options={{
           title: title || conversation?.title || "Chat",
+          headerBackTitle: "",
+          headerBackVisible: true,
           headerStyle: { backgroundColor: "#1a1a2e" },
           headerTintColor: "#e0e0e0",
         }}
       />
 
-      {/* Error banner */}
       {state.error && (
         <View style={styles.errorBanner}>
           <Text style={styles.errorText}>{state.error}</Text>
           <TouchableOpacity onPress={clearError} style={styles.errorClose}>
-            <Text style={styles.errorCloseText}>✕</Text>
+            <Text style={styles.errorCloseText}>x</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -134,26 +164,32 @@ export default function ChatScreen() {
       <FlatList
         ref={flatListRef}
         data={messages}
-        extraData={[rawMessages.length, state.isStreaming]}
+        extraData={[rawMessages.length, isStreaming, panelVisible]}
         keyExtractor={(item) => item.key}
         renderItem={renderItem}
-        contentContainerStyle={styles.messageList}
+        style={styles.list}
+        contentContainerStyle={[
+          styles.messageList,
+          panelVisible && { paddingBottom: 340 },
+        ]}
         onContentSizeChange={scrollToBottom}
+        keyboardShouldPersistTaps="handled"
         ListFooterComponent={
-          state.isStreaming ? (
-            <TypingIndicator content={state.streamingContent} />
+          isStreaming ? (
+            <TypingIndicator content={streamingContent} />
           ) : null
         }
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Text style={styles.emptyText}>开始聊天吧</Text>
+            <Text style={styles.emptyText}>Start chatting</Text>
           </View>
         }
       />
 
-      <ChatInput 
+      <ChatInput
         onSend={handleSend}
-        disabled={state.isStreaming}
+        onSendSticker={handleSendSticker}
+        onPanelToggle={handlePanelToggle}
       />
     </KeyboardAvoidingView>
   );
@@ -163,6 +199,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#16213e",
+  },
+  list: {
+    flex: 1,
   },
   messageList: {
     padding: 16,

@@ -33,15 +33,15 @@ export default function ConversationListScreen() {
         router.push(`/chat/${conv.id}`);
       }
     } catch (err) {
-      Alert.alert("Error", "Failed to create conversation");
+      Alert.alert("错误", "创建对话失败，请重试");
     }
   };
 
   const handleDelete = (id: string) => {
-    Alert.alert("Delete", "Delete this conversation?", [
-      { text: "Cancel", style: "cancel" },
+    Alert.alert("删除对话", "确定要删除这个对话吗？", [
+      { text: "取消", style: "cancel" },
       {
-        text: "Delete",
+        text: "删除",
         style: "destructive",
         onPress: () => deleteConversation(id),
       },

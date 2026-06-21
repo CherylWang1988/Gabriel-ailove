@@ -32,6 +32,8 @@ export interface Message {
   conversation_id: string | null;  // null for proactive messages
   role: "user" | "assistant";
   content: string;
+  message_type?: string;  // text | image | sticker
+  media_url?: string | null;
   is_proactive?: boolean;
   source?: string;
   created_at: string;
@@ -40,6 +42,7 @@ export interface Message {
 export interface ReplyMessage {
   id: string;
   content: string;
+  created_at?: string;
 }
 
 export interface SendMessageResponse {

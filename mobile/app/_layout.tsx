@@ -18,6 +18,8 @@ export default function RootLayout() {
           name="chat/[id]"
           options={{
             headerShown: true,
+            headerBackTitle: "返回",
+            headerBackVisible: true,
             headerStyle: { backgroundColor: "#1a1a2e" },
             headerTintColor: "#e0e0e0",
             headerTitleStyle: { fontWeight: "600" },

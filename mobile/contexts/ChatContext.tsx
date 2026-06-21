@@ -10,8 +10,8 @@ interface ChatState {
   persona: Persona | null;
   conversations: Conversation[];
   messages: Record<string, Message[]>;
-  streamingContent: string;
-  isStreaming: boolean;
+  streamingContent: Record<string, string>;
+  isStreaming: Record<string, boolean>;
   isLoading: boolean;
   error: string | null;
 }
@@ -23,7 +23,7 @@ type ChatAction =
   | { type: "REMOVE_CONVERSATION"; id: string }
   | { type: "SET_MESSAGES"; conversationId: string; messages: Message[] }
   | { type: "ADD_MESSAGE"; conversationId: string; message: Message }
-  | { type: "SET_STREAMING"; isStreaming: boolean; content?: string }
+  | { type: "SET_STREAMING"; conversationId: string; isStreaming: boolean; content?: string }
   | { type: "SET_LOADING"; isLoading: boolean }
   | { type: "SET_ERROR"; error: string | null };
 
@@ -38,11 +38,15 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return { ...state, conversations: [action.conversation, ...state.conversations] };
     case "REMOVE_CONVERSATION":
       return { ...state, conversations: state.conversations.filter((c) => c.id !== action.id) };
-    case "SET_MESSAGES":
+    case "SET_MESSAGES": {
+      const sorted = [...action.messages].sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      );
       return {
         ...state,
-        messages: { ...state.messages, [action.conversationId]: action.messages },
+        messages: { ...state.messages, [action.conversationId]: sorted },
       };
+    }
     case "ADD_MESSAGE": {
       const list = state.messages[action.conversationId] || [];
       if (list.some((m) => m.id === action.message.id)) return state;
@@ -55,8 +59,8 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "SET_STREAMING":
       return {
         ...state,
-        isStreaming: action.isStreaming,
-        streamingContent: action.content ?? "",
+        isStreaming: { ...state.isStreaming, [action.conversationId]: action.isStreaming },
+        streamingContent: { ...state.streamingContent, [action.conversationId]: action.content ?? "" },
       };
     case "SET_LOADING":
       return { ...state, isLoading: action.isLoading };
@@ -71,8 +75,8 @@ const initialState: ChatState = {
   persona: null,
   conversations: [],
   messages: {},
-  streamingContent: "",
-  isStreaming: false,
+  streamingContent: {},
+  isStreaming: {},
   isLoading: false,
   error: null,
 };
@@ -86,17 +90,14 @@ const ChatContext = createContext<{
   createConversation: () => Promise<Conversation | null>;
   deleteConversation: (id: string) => Promise<void>;
   sendMessage: (conversationId: string, content: string) => Promise<void>;
+  sendSticker: (conversationId: string, sticker: { id: string; url: string; label: string }) => Promise<void>;
 } | null>(null);
 
 export function ChatProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(chatReducer, initialState);
   const genRef = useRef(0);
-  // Ref mirror of state.messages — always up-to-date, no stale closure
   const messagesRef = useRef<Record<string, Message[]>>({});
-  // ✅ 新增：管理每个对话的自动发送计时器
-  const timerRef = useRef<Record<string, NodeJS.Timeout | null>>({});
 
-  // Keep messagesRef in sync with state.messages after every render
   messagesRef.current = state.messages;
 
   const clearError = useCallback(() => {
@@ -128,6 +129,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const loadMessages = useCallback(async (conversationId: string) => {
+    ++genRef.current;
     try {
       const msgs = await api.getMessages(conversationId);
       dispatch({ type: "SET_MESSAGES", conversationId, messages: msgs });
@@ -157,12 +159,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const deleteConversation = useCallback(async (id: string) => {
-    // ✅ 清理该对话的计时器
-    if (timerRef.current[id]) {
-      clearTimeout(timerRef.current[id]!);
-      timerRef.current[id] = null;
-    }
-    
     try {
       await api.deleteConversation(id);
       dispatch({ type: "REMOVE_CONVERSATION", id });
@@ -173,15 +169,89 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Shared AI reply pipeline (used by both sendMessage and sendSticker)
+  const handleAIReply = useCallback(async (
+    conversationId: string,
+    content: string,
+    gen: number,
+    isLatest: () => boolean,
+    seenIds: Set<string>,
+  ) => {
+    dispatch({ type: "SET_STREAMING", conversationId, isStreaming: true, content: "" });
+
+    try {
+      const result = await api.replyToMessages(conversationId, content);
+      const replies = result.messages;
+      if (!replies || replies.length === 0) {
+        if (isLatest()) dispatch({ type: "SET_STREAMING", conversationId, isStreaming: false });
+        return;
+      }
+
+      const processedMsgIds = new Set<string>();
+      const curAccumulated: Message[] = messagesRef.current[conversationId] || [];
+
+      for (let ri = 0; ri < replies.length; ri++) {
+        if (!isLatest()) return;
+
+        const msg = replies[ri];
+        const text = msg?.content || "";
+        const msgId = msg?.id || uid();
+
+        if (processedMsgIds.has(msgId)) continue;
+        processedMsgIds.add(msgId);
+
+        // Typewriter animation
+        for (let i = 1; i <= text.length; i++) {
+          if (!isLatest()) return;
+          dispatch({ type: "SET_STREAMING", conversationId, isStreaming: true, content: text.slice(0, i) });
+          await sleep(8 + Math.random() * 12);
+        }
+
+        if (!seenIds.has(msgId)) {
+          const assistantMsg: Message = {
+            id: msgId,
+            conversation_id: conversationId,
+            role: "assistant" as const,
+            content: text,
+            created_at: msg.created_at || new Date().toISOString(),
+          };
+          curAccumulated.push(assistantMsg);
+          seenIds.add(msgId);
+        }
+
+        dispatch({ type: "SET_MESSAGES", conversationId, messages: [...curAccumulated] });
+
+        if (ri < replies.length - 1) {
+          if (!isLatest()) return;
+          dispatch({ type: "SET_STREAMING", conversationId, isStreaming: false });
+          await sleep(800 + Math.random() * 700);
+          if (!isLatest()) return;
+          dispatch({ type: "SET_STREAMING", conversationId, isStreaming: true, content: "" });
+        }
+      }
+
+      if (isLatest()) dispatch({ type: "SET_STREAMING", conversationId, isStreaming: false });
+    } catch (e) {
+      const msg = e instanceof TypeError
+        ? "Network error"
+        : e instanceof Error ? e.message : "Failed to send message";
+      dispatch({ type: "SET_ERROR", error: msg });
+      console.error("handleAIReply:", e);
+      if (isLatest()) dispatch({ type: "SET_STREAMING", conversationId, isStreaming: false });
+    }
+  }, []);
+
+  // Timeline mode: each message sends immediately, no batching
   const sendMessage = useCallback(async (conversationId: string, content: string) => {
     const gen = ++genRef.current;
     const isLatest = () => gen === genRef.current;
 
-    // Build accumulated list from ref
+    dispatch({ type: "SET_STREAMING", conversationId, isStreaming: false });
+
     const existing = messagesRef.current[conversationId] || [];
     const seenIds = new Set(existing.map((m) => m.id));
 
-    // ✅ 第1步：立即显示用户消息（本地），并同时保存到后端
+    // Step 1: show user message instantly + save to backend
     const userMsg: Message = {
       id: uid(),
       conversation_id: conversationId,
@@ -193,7 +263,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     seenIds.add(userMsg.id);
     dispatch({ type: "SET_MESSAGES", conversationId, messages: accumulated });
 
-    // ✅ 第1步：立即保存用户消息到后端（save_only，不触发AI回复）
     try {
       const res = await fetch(`${process.env.EXPO_PUBLIC_API_URL || "http://localhost:8000"}/api/conversations/${conversationId}/messages`, {
         method: "POST",
@@ -204,7 +273,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const data = await res.json();
         const serverId = data?.messages?.[0]?.id;
         if (serverId) {
-          // Replace local UID with server-assigned ID
           const msgs = messagesRef.current[conversationId] || [];
           const updated = msgs.map((m) => (m.id === userMsg.id ? { ...m, id: serverId } : m));
           messagesRef.current[conversationId] = updated;
@@ -215,108 +283,68 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       console.warn("Failed to save user message:", e);
     }
 
-    // ✅ 第2步：3秒后收集所有未回复的消息，一起发给AI处理
-    // 清除旧的计时器（如果存在），启动新的计时器
-    if (timerRef.current[conversationId]) {
-      clearTimeout(timerRef.current[conversationId]!);
+    // Step 2: send immediately (timeline mode, no batching delay)
+    await handleAIReply(conversationId, content, gen, isLatest, seenIds);
+  }, [handleAIReply]);
+
+  // Sticker sends with AI reply
+  const sendSticker = useCallback(async (
+    conversationId: string,
+    sticker: { id: string; url: string; label: string },
+  ) => {
+    const gen = ++genRef.current;
+    const isLatest = () => gen === genRef.current;
+
+    dispatch({ type: "SET_STREAMING", conversationId, isStreaming: false });
+
+    const existing = messagesRef.current[conversationId] || [];
+    const seenIds = new Set(existing.map((m) => m.id));
+
+    const stickerMsg: Message = {
+      id: uid(),
+      conversation_id: conversationId,
+      role: "user",
+      content: sticker.label,
+      message_type: "sticker",
+      media_url: sticker.url,
+      created_at: new Date().toISOString(),
+    };
+    dispatch({ type: "SET_MESSAGES", conversationId, messages: [...existing, stickerMsg] });
+
+    try {
+      const res = await fetch(
+        `${process.env.EXPO_PUBLIC_API_URL || "http://localhost:8000"}/api/conversations/${conversationId}/messages`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            content: sticker.label,
+            message_type: "sticker",
+            media_url: sticker.url,
+            save_only: true,
+          }),
+        },
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const serverId = data?.messages?.[0]?.id;
+        if (serverId) {
+          const msgs = messagesRef.current[conversationId] || [];
+          const updated = msgs.map((m) =>
+            m.id === stickerMsg.id ? { ...m, id: serverId } : m,
+          );
+          messagesRef.current[conversationId] = updated;
+          dispatch({ type: "SET_MESSAGES", conversationId, messages: [...updated] });
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to save sticker:", e);
     }
 
-    timerRef.current[conversationId] = setTimeout(async () => {
-      if (!isLatest()) return;
+    // Send to AI for reply
+    await handleAIReply(conversationId, sticker.label, gen, isLatest, seenIds);
+  }, [handleAIReply]);
 
-      // ✅ 3秒后自动发送所有未回复的消息给AI
-      const latestMsgs = messagesRef.current[conversationId] || [];
-      const userMessages = latestMsgs.filter(m => m.role === "user");
-      
-      // 检查是否还有未回复的消息
-      const lastAssistantMsg = [...latestMsgs].reverse().find(m => m.role === "assistant");
-      const unreplied = lastAssistantMsg 
-        ? userMessages.filter(m => new Date(m.created_at) > new Date(lastAssistantMsg.created_at))
-        : userMessages;
-
-      if (unreplied.length === 0) {
-        timerRef.current[conversationId] = null;
-        return;
-      }
-
-      // 合并所有待回复消息
-      const combinedContent = unreplied.map(m => m.content).join("\n");
-      
-      dispatch({ type: "SET_STREAMING", isStreaming: true, content: "" });
-
-      try {
-        // reply_only: user messages were already saved via save_only above
-        const result = await api.replyToMessages(conversationId, combinedContent);
-        const replies = result.messages;
-        if (!replies || replies.length === 0) {
-          if (isLatest()) dispatch({ type: "SET_STREAMING", isStreaming: false });
-          return;
-        }
-
-        const processedMsgIds = new Set<string>();
-        const curAccumulated: Message[] = messagesRef.current[conversationId] || [];
-
-        for (let ri = 0; ri < replies.length; ri++) {
-          if (!isLatest()) return;
-
-          const msg = replies[ri];
-          const text = msg?.content || "";
-          const msgId = msg?.id || uid();
-
-          if (processedMsgIds.has(msgId)) continue;
-          processedMsgIds.add(msgId);
-
-          // Typewriter animation
-          for (let i = 1; i <= text.length; i++) {
-            if (!isLatest()) return;
-            dispatch({ type: "SET_STREAMING", isStreaming: true, content: text.slice(0, i) });
-            await sleep(30 + Math.random() * 40);
-          }
-
-          if (!seenIds.has(msgId)) {
-            const assistantMsg: Message = {
-              id: msgId,
-              conversation_id: conversationId,
-              role: "assistant" as const,
-              content: text,
-              created_at: new Date().toISOString(),
-            };
-            curAccumulated.push(assistantMsg);
-            seenIds.add(msgId);
-          }
-
-          dispatch({ type: "SET_MESSAGES", conversationId, messages: [...curAccumulated] });
-
-          if (ri < replies.length - 1) {
-            if (!isLatest()) return;
-            dispatch({ type: "SET_STREAMING", isStreaming: false });
-            await sleep(1000 + Math.random() * 1500);
-            if (!isLatest()) return;
-            dispatch({ type: "SET_STREAMING", isStreaming: true, content: "" });
-          }
-        }
-
-        if (isLatest()) dispatch({ type: "SET_STREAMING", isStreaming: false });
-      } catch (e) {
-        const msg = e instanceof TypeError
-          ? "Network error — check your connection"
-          : e instanceof Error ? e.message : "Failed to send message";
-        dispatch({ type: "SET_ERROR", error: msg });
-        console.error("sendMessage:", e);
-        if (isLatest()) dispatch({ type: "SET_STREAMING", isStreaming: false });
-      } finally {
-        timerRef.current[conversationId] = null;
-      }
-    }, 3000); // ✅ 3秒延迟
-  }, []);
-  // ✅ 清理效果：组件卸载时清理所有计时器
-  useEffect(() => {
-    return () => {
-      Object.values(timerRef.current).forEach(timer => {
-        if (timer) clearTimeout(timer);
-      });
-    };
-  }, []);
   return (
     <ChatContext.Provider value={{
       state,
@@ -327,6 +355,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       createConversation,
       deleteConversation,
       sendMessage,
+      sendSticker,
     }}>
       {children}
     </ChatContext.Provider>
