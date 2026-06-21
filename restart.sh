@@ -1,21 +1,25 @@
 #!/bin/bash
 set -e
 
-echo "=== Gabriel Restart ==="
+PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ip.sb 2>/dev/null || echo "YOUR_IP")
 
-# 1. Backend
-echo "[1/2] Rebuilding & restarting backend..."
+echo "=== Gabriel Full Restart ==="
+echo "Public IP: $PUBLIC_IP"
+echo ""
+
+# Backend
+echo "[1/2] Restarting backend..."
 cd /data/Gabriel-ailove/backend
-docker compose down
-docker compose up -d --build
-echo "  Backend: http://localhost:28473"
-echo "  Health:   http://localhost:28473/api/health"
+if docker compose ps 2>/dev/null | grep -q 'running'; then
+  docker compose restart
+else
+  docker compose up -d --build
+fi
+echo "  Backend: http://$PUBLIC_IP:28474"
 
-# 2. Mobile (Expo Web)
+# Mobile (Expo tunnel mode for phone access)
 echo ""
-echo "[2/2] Starting mobile (Expo Web)..."
+echo "[2/2] Starting mobile (tunnel mode)..."
 cd /data/Gabriel-ailove/mobile
-npx expo start --web
-
-echo ""
-echo "=== All services started ==="
+export EXPO_PUBLIC_API_URL="http://$PUBLIC_IP:28474"
+npx expo start --tunnel

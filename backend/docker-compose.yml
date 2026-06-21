@@ -2,7 +2,7 @@ services:
   backend:
     build: .
     ports:
-      - "28473:8000"
+      - "28474:8000"
     volumes:
       - .:/app
       - /app/__pycache__

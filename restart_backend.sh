@@ -1,12 +1,16 @@
 #!/bin/bash
 set -e
 
+PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ip.sb 2>/dev/null || echo "YOUR_IP")
+
 echo "=== Gabriel Backend Restart ==="
+echo "Public IP: $PUBLIC_IP"
+echo ""
+
 cd /data/Gabriel-ailove/backend
 
-# First time: build. Afterwards: just restart (code mounted as volume)
 if docker compose ps 2>/dev/null | grep -q 'running'; then
-  echo "[*] Restarting container (code is volume-mounted, no rebuild needed)..."
+  echo "[*] Restarting container..."
   docker compose restart
 else
   echo "[*] First run — building..."
@@ -14,6 +18,5 @@ else
 fi
 
 echo ""
-echo "Backend:     http://localhost:28473"
-echo "Health API:  http://localhost:28473/api/health"
-echo "Check logs:  docker compose -f /data/Gabriel-ailove/backend/docker-compose.yml logs -f"
+echo "Backend:     http://$PUBLIC_IP:28474"
+echo "Health API:  http://$PUBLIC_IP:28474/api/health"
